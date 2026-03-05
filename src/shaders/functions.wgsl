@@ -161,14 +161,18 @@ fn compute_morph(lod: u32, view_distance: f32) -> f32 {
 
 fn compute_blend(view_distance: f32) -> Blend {
     let target_lod = log2(terrain_view.blend_distance / view_distance);
+    let max_lod = f32(terrain.lod_count - 1u);
+    let clamped_lod = clamp(target_lod, 0.0, max_lod);
+    let blend_lod = u32(clamped_lod);
 
 #ifdef BLEND
-    let ratio = saturate(1.0 - fract(target_lod) / terrain_view.blend_range);
+    let ratio = saturate(1.0 - fract(clamped_lod) / terrain_view.blend_range);
 #else
     let ratio = 0.0;
 #endif
 
-    return Blend(min(u32(target_lod), terrain.lod_count - 1), select(ratio, 0.0, target_lod < 1 || u32(target_lod) >= terrain.lod_count));
+    let blend_enabled = target_lod >= 1.0 && target_lod < f32(terrain.lod_count);
+    return Blend(blend_lod, select(ratio, 0.0, !blend_enabled));
 }
 
 fn compute_view_coordinate(face: u32, lod: u32) -> Coordinate {
@@ -203,22 +207,94 @@ fn compute_subdivision_coordinate(tile: TileCoordinate) -> Coordinate {
 #endif
 }
 
+struct FaceUv {
+    face: u32,
+    uv: vec2<f32>,
+}
+
+fn coordinate_to_unit_position(coordinate: Coordinate) -> vec3<f32> {
+    let uv = (vec2<f32>(coordinate.xy) + coordinate.uv) / exp2(f32(coordinate.lod));
+    let xy = (2.0 * uv - 1.0) / sqrt(1.0 - 4.0 * SIGMA * (uv - 1.0) * uv);
+
+#ifdef SPHERICAL
+    var unit_position: vec3<f32>;
+    switch (coordinate.face) {
+        case 0u: { unit_position = vec3(-1.0, -xy.y,  xy.x); }
+        case 1u: { unit_position = vec3( xy.x, -xy.y,  1.0); }
+        case 2u: { unit_position = vec3( xy.x,  1.0,  xy.y); }
+        case 3u: { unit_position = vec3( 1.0, -xy.x,  xy.y); }
+        case 4u: { unit_position = vec3( xy.y, -xy.x, -1.0); }
+        case 5u: { unit_position = vec3( xy.y, -1.0,  xy.x); }
+        case default: {}
+    }
+    return normalize(unit_position);
+#else
+    return vec3<f32>(uv.x - 0.5, 0.0, uv.y - 0.5);
+#endif
+}
+
+fn coordinate_from_unit_position(unit_position: vec3<f32>) -> FaceUv {
+#ifdef SPHERICAL
+    let ax = abs(unit_position.x);
+    let ay = abs(unit_position.y);
+    let az = abs(unit_position.z);
+
+    var face: u32;
+    if (ax > ay && ax > az && unit_position.x < 0.0) {
+        face = 0u;
+    } else if (ax > ay && ax > az) {
+        face = 3u;
+    } else if (az > ay && unit_position.z > 0.0) {
+        face = 1u;
+    } else if (az > ay) {
+        face = 4u;
+    } else if (unit_position.y > 0.0) {
+        face = 2u;
+    } else {
+        face = 5u;
+    }
+
+    var xy: vec2<f32>;
+    switch (face) {
+        case 0u: { xy = vec2<f32>(-unit_position.z / unit_position.x,  unit_position.y / unit_position.x); }
+        case 1u: { xy = vec2<f32>( unit_position.x / unit_position.z, -unit_position.y / unit_position.z); }
+        case 2u: { xy = vec2<f32>( unit_position.x / unit_position.y,  unit_position.z / unit_position.y); }
+        case 3u: { xy = vec2<f32>(-unit_position.y / unit_position.x,  unit_position.z / unit_position.x); }
+        case 4u: { xy = vec2<f32>( unit_position.y / unit_position.z, -unit_position.x / unit_position.z); }
+        case 5u: { xy = vec2<f32>( unit_position.z / -unit_position.y, unit_position.x / -unit_position.y); }
+        case default: { xy = vec2<f32>(0.0); }
+    }
+
+    let uv = 0.5 * xy * sqrt((1.0 + SIGMA) / (1.0 + SIGMA * xy * xy)) + 0.5;
+    return FaceUv(face, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
+#else
+    return FaceUv(0u, clamp(unit_position.xz + 0.5, vec2<f32>(0.0), vec2<f32>(1.0)));
+#endif
+}
+
 fn coordinate_change_lod(coordinate: ptr<function, Coordinate>, new_lod: u32) {
-    let lod_difference = i32(new_lod) - i32((*coordinate).lod);
+    let old_lod = (*coordinate).lod;
+    if (old_lod == new_lod) { return; }
+    let old_face = (*coordinate).face;
 
-    if (lod_difference == 0) { return; }
+    let canonical = coordinate_from_unit_position(coordinate_to_unit_position((*coordinate)));
+    let tile_count = exp2(f32(new_lod));
+    let scaled_uv = clamp(canonical.uv, vec2<f32>(0.0), vec2<f32>(1.0 - 1e-6)) * tile_count;
 
-    let scale = exp2(f32(lod_difference));
-    let xy = (*coordinate).xy;
-    let uv = (*coordinate).uv * scale;
-
+    (*coordinate).face = canonical.face;
     (*coordinate).lod = new_lod;
-    (*coordinate).xy = vec2<u32>(vec2<f32>(xy) * scale) + vec2<u32>(uv);
-    (*coordinate).uv = uv % 1.0 + select(vec2<f32>(xy % u32(1 / scale)) * scale, vec2<f32>(0.0), lod_difference > 0);
+    (*coordinate).xy = vec2<u32>(scaled_uv);
+    (*coordinate).uv = scaled_uv % 1.0;
 
 #ifdef FRAGMENT
-    (*coordinate).uv_dx *= scale;
-    (*coordinate).uv_dy *= scale;
+    let lod_scale = exp2(f32(new_lod) - f32(old_lod));
+    if (canonical.face == old_face) {
+        (*coordinate).uv_dx *= lod_scale;
+        (*coordinate).uv_dy *= lod_scale;
+    } else {
+        (*coordinate).uv_dx = vec2<f32>(0.0);
+        (*coordinate).uv_dy = vec2<f32>(0.0);
+    }
 #endif
 }
 
