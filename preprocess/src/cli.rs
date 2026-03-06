@@ -17,24 +17,24 @@ pub struct Cli {
     #[arg(required = true)]
     // cloud be optional and use current directory, but this would be risky in combination with overwrite
     pub terrain_path: PathBuf,
-    #[arg(default_value = None)]
+    #[arg(long)]
     pub temp_path: Option<PathBuf>,
 
     #[arg(short, long, default_value_t = false)]
     pub overwrite: bool,
-    #[arg(default_value = "source")]
+    #[arg(long, default_value = "source")]
     pub no_data: PreprocessNoData,
-    #[arg(default_value = "source")]
+    #[arg(long, default_value = "source")]
     pub data_type: PreprocessDataType,
-    #[arg(default_value_t = 16.0)]
+    #[arg(long, default_value_t = 16.0)]
     pub fill_radius: f32,
-    #[arg(default_value_t = false)]
+    #[arg(long, default_value_t = false)]
     pub create_mask: bool,
 
-    #[arg(default_value = None)]
+    #[arg(long)]
     pub lod_count: Option<u32>,
 
-    #[arg(default_value = "height")]
+    #[arg(long, default_value = "height")]
     pub attachment_label: AttachmentLabel,
     #[arg(short, long = "ts", default_value_t = 512)]
     pub texture_size: u32,
@@ -42,7 +42,7 @@ pub struct Cli {
     pub border_size: u32,
     #[arg(short, long = "m", default_value_t = 1)]
     pub mip_level_count: u32,
-    #[arg(default_value = "ru16")]
+    #[arg(long, default_value = "ru16")]
     pub format: AttachmentFormat,
 }
 
@@ -76,7 +76,7 @@ impl PreprocessBar<'_> {
         }
     }
 
-    pub(crate) fn callback(&self) -> &ProgressCallback {
+    pub(crate) fn callback(&self) -> &ProgressCallback<'_> {
         self.callback.as_ref()
     }
 
