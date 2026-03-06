@@ -50,6 +50,55 @@ Use the preprocess CLI or a prepared configuration in the `preprocess/examples` 
 Then run the `examples/spherical.rs` demo with the preprocessed dataset selected.
 The default path for the datasets is `source_data`.
 
+For a global base + local high-resolution overlay workflow (without rebuilding
+the whole Earth each time), see
+[`docs/multires_workflow.md`](docs/multires_workflow.md) and run
+`examples/spherical_multires.rs`.
+
+## Saxony DGM1 Dataset
+
+The repository includes scripts for discovery, download/resume, extraction, and
+demo setup:
+
+```bash
+cd /path/to/planetary_terrain_renderer
+
+# discover valid tiles from the share and write source_data/saxony_dgm1/urls.txt
+./scripts/download_saxony_dgm1.sh discover
+
+# download all discovered ZIP files
+./scripts/download_saxony_dgm1.sh download
+
+# extract all GeoTIFFs
+./scripts/download_saxony_dgm1.sh extract
+
+# build saxony overlay from extracted TIFFs
+./scripts/setup_saxony_partial_demo.sh
+
+# run demo
+MULTIRES_OVERLAYS=saxony cargo run --example spherical_multires
+```
+
+Useful helpers:
+
+```bash
+# show live counts and disk usage
+./scripts/download_saxony_dgm1.sh status
+
+# repair/resume by redownloading only missing/corrupt ZIPs
+./scripts/redownload_saxony_dgm1.sh
+```
+
+Notes:
+- Default output root is `source_data/saxony_dgm1`.
+- Use `EAST_MIN/EAST_MAX/NORTH_MIN/NORTH_MAX` to narrow the discovery range.
+- ZIPs are optional after extraction; `PURGE_ZIPS_AFTER_EXTRACT=1` can reclaim
+  disk space.
+
+Detailed operations, tuning, and reliability guidance:
+- [`docs/saxony_workflow.md`](docs/saxony_workflow.md)
+- [`docs/review_feedback_2026-03-05.md`](docs/review_feedback_2026-03-05.md)
+
 ## Debug Controls
 
 These are the debug controls of the plugin.
