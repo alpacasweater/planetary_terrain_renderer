@@ -1,8 +1,6 @@
 use crate::shaders::DEPTH_COPY_SHADER;
 use bevy::{
-    core_pipeline::{
-        core_3d::CORE_3D_DEPTH_FORMAT, fullscreen_vertex_shader::fullscreen_shader_vertex_state,
-    },
+    core_pipeline::{FullscreenShader, core_3d::CORE_3D_DEPTH_FORMAT},
     ecs::query::QueryItem,
     prelude::*,
     render::{
@@ -136,7 +134,7 @@ impl TerrainViewDepthTexture {
         }
     }
 
-    pub fn get_attachment(&self) -> RenderPassDepthStencilAttachment {
+    pub fn get_attachment(&self) -> RenderPassDepthStencilAttachment<'_> {
         RenderPassDepthStencilAttachment {
             view: &self.view,
             depth_ops: Some(Operations {
@@ -193,26 +191,27 @@ pub struct DepthCopyPipeline {
 
 impl FromWorld for DepthCopyPipeline {
     fn from_world(world: &mut World) -> Self {
-        let device = world.resource::<RenderDevice>();
         let pipeline_cache = world.resource::<PipelineCache>();
+        let fullscreen_shader = world.resource::<FullscreenShader>();
 
-        let layout = device.create_bind_group_layout(
-            None,
+        let layout_descriptor = BindGroupLayoutDescriptor::new(
+            "depth_copy_pipeline_layout",
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::FRAGMENT,
                 (texture_depth_2d_multisampled(),),
             ),
         );
+        let layout = pipeline_cache.get_bind_group_layout(&layout_descriptor);
 
         let id = pipeline_cache.queue_render_pipeline(RenderPipelineDescriptor {
             label: None,
-            layout: vec![layout.clone()],
+            layout: vec![layout_descriptor],
             push_constant_ranges: Vec::new(),
-            vertex: fullscreen_shader_vertex_state(),
+            vertex: fullscreen_shader.to_vertex_state(),
             fragment: Some(FragmentState {
                 shader: world.load_asset(DEPTH_COPY_SHADER),
                 shader_defs: vec![],
-                entry_point: "fragment".into(),
+                entry_point: Some("fragment".into()),
                 targets: vec![],
             }),
             primitive: Default::default(),
@@ -253,6 +252,7 @@ impl ViewNode for TerrainPass {
         context: &mut RenderContext<'w>,
         (render_view, main_view, camera, target, depth, terrain_depth): QueryItem<
             'w,
+            '_,
             Self::ViewQuery,
         >,
         world: &'w World,

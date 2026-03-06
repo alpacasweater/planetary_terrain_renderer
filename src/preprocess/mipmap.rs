@@ -12,28 +12,9 @@ use bevy::{
         render_resource::{binding_types::*, *},
         renderer::{RenderContext, RenderDevice},
     },
+    shader::ShaderDefVal,
 };
 use strum::IntoEnumIterator;
-
-pub(crate) fn create_mip_layout(
-    device: &RenderDevice,
-    format: AttachmentFormat,
-) -> BindGroupLayout {
-    device.create_bind_group_layout(
-        None,
-        &BindGroupLayoutEntries::sequential(
-            ShaderStages::COMPUTE,
-            (
-                uniform_buffer::<u32>(false), // atlas_index
-                texture_2d_array(TextureSampleType::Float { filterable: true }), // parent
-                texture_storage_2d_array(
-                    format.processing_format(),
-                    StorageTextureAccess::WriteOnly,
-                ), // child
-            ),
-        ),
-    )
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct MipPipelineKey {
@@ -62,6 +43,7 @@ impl MipPipelineKey {
 #[derive(Resource)]
 pub struct MipPipelines {
     pub(crate) mip_layouts: HashMap<AttachmentFormat, BindGroupLayout>,
+    mip_layout_descriptors: HashMap<AttachmentFormat, BindGroupLayoutDescriptor>,
     mip_shader: Handle<Shader>,
 }
 
@@ -70,13 +52,31 @@ impl FromWorld for MipPipelines {
         let device = world.resource::<RenderDevice>();
         let asset_server = world.resource::<AssetServer>();
 
-        let mip_layouts = AttachmentFormat::iter()
-            .map(|format| (format, create_mip_layout(device, format)))
-            .collect();
+        let mut mip_layouts = HashMap::default();
+        let mut mip_layout_descriptors = HashMap::default();
+        for format in AttachmentFormat::iter() {
+            let entries = BindGroupLayoutEntries::sequential(
+                ShaderStages::COMPUTE,
+                (
+                    uniform_buffer::<u32>(false), // atlas_index
+                    texture_2d_array(TextureSampleType::Float { filterable: true }), // parent
+                    texture_storage_2d_array(
+                        format.processing_format(),
+                        StorageTextureAccess::WriteOnly,
+                    ), // child
+                ),
+            );
+            mip_layouts.insert(format, device.create_bind_group_layout(None, &entries));
+            mip_layout_descriptors.insert(
+                format,
+                BindGroupLayoutDescriptor::new(format!("mip_layout_{format:?}"), &entries),
+            );
+        }
         let mip_shader = asset_server.load(MIP_SHADER);
 
         Self {
             mip_layouts,
+            mip_layout_descriptors,
             mip_shader,
         }
     }
@@ -88,11 +88,11 @@ impl SpecializedComputePipeline for MipPipelines {
     fn specialize(&self, key: Self::Key) -> ComputePipelineDescriptor {
         ComputePipelineDescriptor {
             label: Some("mip_pipeline".into()),
-            layout: vec![self.mip_layouts[&key.format].clone()],
+            layout: vec![self.mip_layout_descriptors[&key.format].clone()],
             push_constant_ranges: default(),
             shader: self.mip_shader.clone(),
             shader_defs: key.shader_defs(),
-            entry_point: "main".into(),
+            entry_point: Some("main".into()),
             zero_initialize_workgroup_memory: false,
         }
     }

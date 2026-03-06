@@ -1,10 +1,14 @@
 use crate::picking::PickingData;
 use bevy::{
     color::palettes::basic,
-    input::{ButtonInput, mouse::AccumulatedMouseMotion},
+    input::{
+        ButtonInput,
+        gestures::PinchGesture,
+        mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit},
+    },
     math::{DQuat, DVec2, DVec3, Mat4, Vec2},
     prelude::*,
-    window::{CursorGrabMode, PrimaryWindow},
+    window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
 use big_space::prelude::*;
 
@@ -60,7 +64,7 @@ pub struct OrbitalCameraController {
     enabled: bool,
     cursor_coords: Vec2,
     anchor_position: DVec3,
-    anchor_cell: GridCell,
+    anchor_cell: CellCoord,
     camera_position: DVec3,
     camera_rotation: DQuat,
     pan_data: Option<PanData>,
@@ -94,14 +98,16 @@ pub fn orbital_camera_controller(
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_move: Res<AccumulatedMouseMotion>,
+    mouse_scroll: Res<AccumulatedMouseScroll>,
+    mut pinch_gestures: MessageReader<PinchGesture>,
     mut camera: Query<(
         Entity,
         &mut Transform,
-        &mut GridCell,
+        &mut CellCoord,
         &PickingData,
         &mut OrbitalCameraController,
     )>,
-    mut window: Query<&mut Window, With<PrimaryWindow>>,
+    mut window: Query<(&mut Window, &mut CursorOptions), With<PrimaryWindow>>,
 ) {
     let Ok((camera, mut camera_transform, mut camera_cell, picking_data, mut controller)) =
         camera.single_mut()
@@ -119,7 +125,7 @@ pub fn orbital_camera_controller(
 
     let smoothing = (time.delta_secs_f64() / controller.time_to_reach_target).min(1.0);
     let grid = grids.parent_grid(camera).unwrap();
-    let mut window = window.single_mut().unwrap();
+    let (mut window, mut cursor_options) = window.single_mut().unwrap();
 
     let terrain_origin = DVec3::ZERO;
     let camera_position = grid.grid_position_double(&camera_cell, &camera_transform);
@@ -132,6 +138,12 @@ pub fn orbital_camera_controller(
         grid.grid_position_double(&cursor_cell, &Transform::from_translation(translation))
     });
     let cursor_coords = picking_data.cursor_coords;
+    let scroll_delta = match mouse_scroll.unit {
+        MouseScrollUnit::Line => mouse_scroll.delta.y as f64,
+        MouseScrollUnit::Pixel => mouse_scroll.delta.y as f64 / 40.0,
+    };
+    let pinch_delta = pinch_gestures.read().map(|gesture| gesture.0 as f64).sum::<f64>();
+    let gesture_zoom_active = scroll_delta != 0.0 || pinch_delta != 0.0;
 
     let mut update_cursor_coords = true;
 
@@ -186,38 +198,62 @@ pub fn orbital_camera_controller(
         controller.rotation_data = None;
     }
 
-    if mouse_buttons.pressed(MouseButton::Right) {
-        if controller.zoom_data.is_none() && cursor_position.is_some() {
-            controller.anchor_position = cursor_position.unwrap();
-            controller.anchor_cell = cursor_cell;
+    if mouse_buttons.pressed(MouseButton::Right) || gesture_zoom_active {
+        if controller.zoom_data.is_none() {
+            let anchor_position = cursor_position.or_else(|| {
+                if controller.anchor_position.is_finite() {
+                    Some(controller.anchor_position)
+                } else {
+                    None
+                }
+            });
+
+            let Some(anchor_position) = anchor_position else {
+                return;
+            };
+
+            controller.anchor_position = anchor_position;
+            controller.anchor_cell = if cursor_position.is_some() {
+                cursor_cell
+            } else {
+                controller.anchor_cell
+            };
             controller.camera_position = camera_position;
             controller.camera_rotation = camera_rotation;
 
-            let zoom = (cursor_position.unwrap() - camera_position).length().log2();
+            let zoom = (anchor_position - camera_position).length().log2();
 
             controller.zoom_data = Some(ZoomData {
                 target_zoom: zoom,
                 zoom,
             });
-        } else {
+        } else if mouse_buttons.pressed(MouseButton::Right) {
             update_cursor_coords = false;
         }
 
-        let zoom_speed = 0.01;
+        let drag_zoom_speed = 0.01;
+        let scroll_zoom_speed = 0.08;
+        let pinch_zoom_speed = 1.2;
 
         if let Some(data) = controller.zoom_data.as_mut() {
-            data.target_zoom -= mouse_move.delta.element_sum() as f64 * zoom_speed;
+            if mouse_buttons.pressed(MouseButton::Right) {
+                data.target_zoom -= mouse_move.delta.element_sum() as f64 * drag_zoom_speed;
+            }
+            if scroll_delta != 0.0 {
+                data.target_zoom -= scroll_delta * scroll_zoom_speed;
+            }
+            if pinch_delta != 0.0 {
+                data.target_zoom -= pinch_delta * pinch_zoom_speed;
+            }
             data.zoom = data.zoom.lerp(data.target_zoom, smoothing);
         }
     } else {
         controller.zoom_data = None;
     }
 
-    // Todo: add support for scroll wheel zoom
-
     if update_cursor_coords {
-        if window.cursor_options.grab_mode == CursorGrabMode::Locked {
-            window.cursor_options.grab_mode = CursorGrabMode::None;
+        if cursor_options.grab_mode == CursorGrabMode::Locked {
+            cursor_options.grab_mode = CursorGrabMode::None;
             let window_size = window.size();
             window.set_cursor_position(Some(
                 Vec2::new(controller.cursor_coords.x, 1.0 - controller.cursor_coords.y)
@@ -227,7 +263,7 @@ pub fn orbital_camera_controller(
 
         controller.cursor_coords = cursor_coords;
     } else {
-        window.cursor_options.grab_mode = CursorGrabMode::Locked;
+        cursor_options.grab_mode = CursorGrabMode::Locked;
     }
 
     if controller.pan_data.is_none()

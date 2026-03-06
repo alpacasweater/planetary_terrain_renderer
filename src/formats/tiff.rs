@@ -1,17 +1,14 @@
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{AssetLoader, LoadContext, RenderAssetUsages, io::Reader},
     image::ImageLoaderError,
     prelude::*,
-    render::{
-        render_asset::RenderAssetUsages,
-        render_resource::{Extent3d, TextureDimension, TextureFormat},
-    },
+    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
 use bytemuck::cast_slice;
 use std::io::Cursor;
 use tiff::decoder::{Decoder, DecodingResult};
 
-#[derive(Default)]
+#[derive(Default, TypePath)]
 pub struct TiffLoader;
 impl AssetLoader for TiffLoader {
     type Asset = Image;

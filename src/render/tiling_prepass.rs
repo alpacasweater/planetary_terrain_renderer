@@ -17,6 +17,7 @@ use bevy::{
         render_resource::*,
         renderer::{RenderContext, RenderDevice},
     },
+    shader::ShaderDefVal,
 };
 
 bitflags::bitflags! {
@@ -123,10 +124,10 @@ impl TilingPrepassItem {
 
 #[derive(Resource)]
 pub struct TerrainTilingPrepassPipelines {
-    pub(crate) terrain_layout: BindGroupLayout,
-    pub(crate) terrain_view_layout: BindGroupLayout,
-    pub(crate) indirect_layout: BindGroupLayout,
-    pub(crate) prepass_view_layout: BindGroupLayout,
+    pub(crate) terrain_layout: BindGroupLayoutDescriptor,
+    pub(crate) terrain_view_layout: BindGroupLayoutDescriptor,
+    pub(crate) indirect_layout: BindGroupLayoutDescriptor,
+    pub(crate) prepass_view_layout: BindGroupLayoutDescriptor,
     prepare_prepass_shader: Handle<Shader>,
     refine_tiles_shader: Handle<Shader>,
 }
@@ -135,10 +136,10 @@ impl FromWorld for TerrainTilingPrepassPipelines {
     fn from_world(world: &mut World) -> Self {
         let device = world.resource::<RenderDevice>();
 
-        let terrain_layout = TerrainBindGroup::bind_group_layout(device);
-        let terrain_view_layout = TerrainViewBindGroup::bind_group_layout(device);
-        let indirect_layout = IndirectBindGroup::bind_group_layout(device);
-        let prepass_view_layout = PrepassViewBindGroup::bind_group_layout(device);
+        let terrain_layout = TerrainBindGroup::bind_group_layout_descriptor(device);
+        let terrain_view_layout = TerrainViewBindGroup::bind_group_layout_descriptor(device);
+        let indirect_layout = IndirectBindGroup::bind_group_layout_descriptor(device);
+        let prepass_view_layout = PrepassViewBindGroup::bind_group_layout_descriptor(device);
 
         let prepare_prepass_shader = world.load_asset(PREPARE_PREPASS_SHADER);
         let refine_tiles_shader = world.load_asset(REFINE_TILES_SHADER);
@@ -170,7 +171,7 @@ impl SpecializedComputePipeline for TerrainTilingPrepassPipelines {
                 self.terrain_layout.clone(),
             ];
             shader = self.refine_tiles_shader.clone();
-            entry_point = "refine_tiles".into();
+            entry_point = Some("refine_tiles".into());
         }
         if key.contains(TilingPrepassPipelineKey::PREPARE_ROOT) {
             layout = vec![
@@ -179,7 +180,7 @@ impl SpecializedComputePipeline for TerrainTilingPrepassPipelines {
                 self.indirect_layout.clone(),
             ];
             shader = self.prepare_prepass_shader.clone();
-            entry_point = "prepare_root".into();
+            entry_point = Some("prepare_root".into());
         }
         if key.contains(TilingPrepassPipelineKey::PREPARE_NEXT) {
             layout = vec![
@@ -188,7 +189,7 @@ impl SpecializedComputePipeline for TerrainTilingPrepassPipelines {
                 self.indirect_layout.clone(),
             ];
             shader = self.prepare_prepass_shader.clone();
-            entry_point = "prepare_next".into();
+            entry_point = Some("prepare_next".into());
         }
         if key.contains(TilingPrepassPipelineKey::PREPARE_RENDER) {
             layout = vec![
@@ -197,7 +198,7 @@ impl SpecializedComputePipeline for TerrainTilingPrepassPipelines {
                 self.indirect_layout.clone(),
             ];
             shader = self.prepare_prepass_shader.clone();
-            entry_point = "prepare_render".into();
+            entry_point = Some("prepare_render".into());
         }
 
         ComputePipelineDescriptor {

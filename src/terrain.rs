@@ -6,8 +6,9 @@ use crate::{
     terrain_data::{AttachmentConfig, AttachmentLabel},
 };
 use bevy::{
-    asset::ron, ecs::entity::hash_map::EntityHashMap, platform::collections::HashMap, prelude::*,
+    ecs::entity::hash_map::EntityHashMap, platform::collections::HashMap, prelude::*,
 };
+use ron::{de::from_str, ser::to_string_pretty};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 
@@ -66,11 +67,11 @@ impl TerrainConfig {
 
     pub fn load_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let encoded = fs::read_to_string(path)?;
-        Ok(ron::from_str(&encoded)?)
+        Ok(from_str(&encoded)?)
     }
 
     pub fn save_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let encoded = ron::ser::to_string_pretty(self, default())?;
+        let encoded = to_string_pretty(self, default())?;
         Ok(fs::write(path, encoded)?)
     }
 }

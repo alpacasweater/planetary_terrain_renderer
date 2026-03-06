@@ -1,5 +1,6 @@
 use bevy::window::WindowResolution;
 use bevy::{prelude::*, reflect::TypePath, render::render_resource::*};
+use bevy::shader::ShaderRef;
 use bevy_terrain::prelude::*;
 use std::path::Path;
 use std::{collections::HashMap, env};
@@ -35,7 +36,7 @@ fn main() {
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(Window {
-                        resolution: WindowResolution::new(1920.0, 1080.0),
+                        resolution: WindowResolution::new(1920, 1080),
                         ..default()
                     }),
                     ..default()
