@@ -395,3 +395,49 @@ Interpretation:
 - the depth-texture churn fix is worth keeping
 - CPU-side prep phases on the accepted low-latency baseline are now deep into the sub-millisecond range
 - the next meaningful work is even more clearly on GPU-pass attribution and render-path cost, not streaming heuristics
+
+## O7 Rejected Follow-Ups: Depth-Copy Bind-Group Caching And Depth-View Reuse
+
+Two narrower render-path follow-ups were tested immediately after the accepted depth-texture cache change.
+
+Attempt 1:
+- cache the depth-copy bind group outside the render node and rebuild it only when the terrain depth target changes
+
+Result:
+- artifact: `/tmp/terrain_depth_bindgroup_confirm/summary.txt`
+- FPS `102.12`
+- frame mean `9.795 ms`
+- p95 `14.749 ms`
+- p99 `16.844 ms`
+
+Compared to the accepted depth-texture-cache baseline:
+- FPS regressed from `103.76` to `102.12`
+- frame mean regressed from `9.645 ms` to `9.795 ms`
+- p95 regressed from `14.387 ms` to `14.749 ms`
+
+Decision:
+- rejected
+- the extra component and prepare-stage complexity was not justified by the measurement
+
+Attempt 2:
+- keep bind-group creation in the node, but reuse the cached `terrain_depth.depth_view` instead of rebuilding a fresh depth-only texture view every frame
+
+Result:
+- artifact: `/tmp/terrain_depth_view_reuse_confirm/summary.txt`
+- FPS `106.11`
+- frame mean `9.433 ms`
+- p95 `14.101 ms`
+- p99 `17.953 ms`
+
+Interpretation:
+- mean frame time and p95 looked better in one 3-trial sample
+- p99 and per-trial behavior became less consistent than the accepted baseline
+- the evidence was not strong enough to call this a stable improvement
+
+Decision:
+- rejected for now
+- keep the branch on the last clearly validated win rather than stacking ambiguous micro-optimizations
+
+Current implication:
+- the accepted baseline remains the depth-texture cache change
+- the next optimization step should target larger, clearly attributable GPU or pass-level costs, not additional small CPU churn tweaks around the same path

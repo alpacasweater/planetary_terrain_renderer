@@ -51,6 +51,7 @@ cargo run --example spherical_multires
 - Renderer-native WGS84 and local-frame transforms now agree with `small_world`.
 - Base Earth height parity is materially improved with `lod_count = 5`.
 - The rebuilt Swiss overlay is physically credible against its source DEM and supports the drone demo.
+- Current validated Swiss low-latency benchmark baseline is about `103.76 FPS`, `9.64 ms` mean frame time, `14.39 ms` p95, and `17.31 ms` p99.
 - The main open work is performance: remaining GPU/pass attribution, terrain depth-copy or main-pass cost on the low-latency baseline, and cleanup of noisy missing-asset paths. The old CPU upload hotspot is no longer the primary accepted target on the `MSAA=1` Swiss benchmark path.
 
 ## Data and Preprocessing

@@ -112,6 +112,7 @@ Current first target:
 - the simplified terrain `relief_shading()` path in `src/shaders/attachments.wgsl` is now the accepted baseline because it moved the Swiss sweep from about `60.97 FPS / 16.40 ms mean / 25.21 ms p95` to about `99.55 FPS / 10.05 ms mean / 15.23 ms p95`
 - reusing terrain depth textures across frames improved the default Swiss low-latency path further to about `103.76 FPS / 9.64 ms mean / 14.39 ms p95`
 - terrain blending was measured as a modest but non-compelling win and is not the next accepted default change
+- caching the depth-copy bind group and reusing the cached depth view were both tested and rejected as insufficiently robust follow-ups
 - next work should isolate terrain depth copy and remaining main-opaque-pass cost rather than returning to upload heuristics prematurely
 
 ### O4: Integration And Merge Gate Verification
