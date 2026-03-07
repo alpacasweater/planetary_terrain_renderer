@@ -299,3 +299,99 @@ Current implication:
 - the main accepted low-latency path is now much closer to a genuinely snappy baseline
 - future optimization should start from this lighter terrain-shading path
 - the next likely targets are terrain depth work, remaining main-pass overhead, and better GPU attribution, not upload reordering
+
+## O5 Isolation: Terrain Blending Was Not Strong Enough To Promote
+
+Short feature-toggle isolation on the accepted `MSAA_SAMPLES=1` baseline:
+- default:
+  - FPS `101.11`
+  - frame mean `9.890 ms`
+  - p95 `15.271 ms`
+- `TERRAIN_BLEND=0`
+  - FPS `105.62`
+  - frame mean `9.468 ms`
+  - p95 `13.016 ms`
+- `TERRAIN_MORPH=0`
+  - FPS `91.47`
+  - frame mean `10.932 ms`
+  - p95 `18.318 ms`
+- `TERRAIN_SAMPLE_GRAD=0`
+  - FPS `99.99`
+  - frame mean `10.001 ms`
+  - p95 `15.661 ms`
+- `TERRAIN_HIGH_PRECISION=0`
+  - FPS `78.92`
+  - frame mean `12.672 ms`
+  - p95 `19.371 ms`
+
+Interpretation:
+- `morph_off`, `sample_grad_off`, and `high_precision_off` were clearly not the next optimization path
+- `blend_off` looked promising in one moving-sweep run, but that was not enough to justify a default-quality change
+
+Close-up visual A/B (`CAMERA_ALT_M=15000`, `CAMERA_BACKOFF_M=25000`, sweep disabled):
+- default:
+  - FPS `69.42`
+  - p95 `20.446 ms`
+  - capture: `/tmp/terrain_blend_visual_captures/default/trial_1/frame_000060.png`
+- `blend_off`:
+  - FPS `70.30`
+  - p95 `21.356 ms`
+  - capture: `/tmp/terrain_blend_visual_captures/blend_off/trial_1/frame_000060.png`
+
+Follow-up 3-trial confirmation:
+- default:
+  - artifact: `/tmp/terrain_blend_confirm/default/summary.txt`
+  - FPS `99.31`
+  - frame mean `10.076 ms`
+  - p95 `15.266 ms`
+  - p99 `18.746 ms`
+- `blend_off`:
+  - artifact: `/tmp/terrain_blend_confirm/blend_off/summary.txt`
+  - FPS `102.65`
+  - frame mean `9.746 ms`
+  - p95 `14.730 ms`
+  - p99 `17.237 ms`
+
+Decision:
+- keep blending enabled by default
+- the gain is real but modest, and the close-up view did not make the trade compelling enough to change the renderer contract
+- blending remains a diagnostic isolation toggle, not the next accepted optimization
+
+## O6 Optimization: Cache Terrain Depth Textures Across Frames
+
+The CPU-side hottest phase after the shading fix was often `render.prepare_resources.terrain_depth_textures`, but at only about `0.18 ms p95`.
+
+Even so, it was still rebuilding and reinserting `TerrainViewDepthTexture` components every frame, including fresh depth/stencil views for unchanged targets. That is unnecessary render-path churn.
+
+Implemented fix:
+- `TerrainViewDepthTexture` now stores the view size and sample count
+- `prepare_terrain_depth_textures()` reuses the existing component when the physical target size and MSAA sample count are unchanged
+
+Before/after 3-trial Swiss default comparison:
+- pre-fix:
+  - artifact: `/tmp/terrain_blend_confirm/default/summary.txt`
+  - FPS `99.31`
+  - frame mean `10.076 ms`
+  - p95 `15.266 ms`
+  - p99 `18.746 ms`
+- post-fix:
+  - artifact: `/tmp/terrain_depth_cache_confirm/summary.txt`
+  - FPS `103.76`
+  - frame mean `9.645 ms`
+  - p95 `14.387 ms`
+  - p99 `17.314 ms`
+
+Effect:
+- FPS: `99.31 -> 103.76`
+- frame mean: `10.076 ms -> 9.645 ms`
+- p95: `15.266 ms -> 14.387 ms`
+- p99: `18.746 ms -> 17.314 ms`
+
+New CPU-side hottest phase after this fix:
+- `render.prepare.gpu_terrain`
+- p95 about `0.08-0.10 ms`
+
+Interpretation:
+- the depth-texture churn fix is worth keeping
+- CPU-side prep phases on the accepted low-latency baseline are now deep into the sub-millisecond range
+- the next meaningful work is even more clearly on GPU-pass attribution and render-path cost, not streaming heuristics

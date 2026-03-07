@@ -203,7 +203,9 @@ This writes:
 - `MSAA_SAMPLES=1` is the current low-latency benchmark default. Keep `MSAA_SAMPLES=4` for quality-control comparisons rather than day-to-day optimization work.
 - Short Swiss isolation runs on this machine showed `MSAA_SAMPLES=1` materially outperforms `MSAA_SAMPLES=4`.
 - On the accepted `MSAA_SAMPLES=1` baseline, the simplified terrain relief shader moved the Swiss sweep from about `60.97 FPS / 16.40 ms mean / 25.21 ms p95` to about `99.55 FPS / 10.05 ms mean / 15.23 ms p95`.
+- Reusing terrain depth textures across frames improved the current 3-trial Swiss default from about `99.31 FPS / 10.08 ms mean / 15.27 ms p95` to about `103.76 FPS / 9.64 ms mean / 14.39 ms p95`.
 - Terrain-lighting toggles are useful for controlled isolation only. The optimized baseline keeps terrain lighting enabled.
+- Terrain blending is also exposed for isolation, but the measured gain was too small and view-sensitive to accept as a new default.
 - The example supports PNG capture envs directly: `MULTIRES_CAPTURE_DIR` and `MULTIRES_CAPTURE_FRAMES`.
 - The example also supports one-shot Metal capture envs when built with `--features metal_capture`: `MULTIRES_METAL_CAPTURE_FRAME` and `MULTIRES_METAL_CAPTURE_DIR`.
 - Use fixed overlay and camera settings when comparing runs.

@@ -110,7 +110,9 @@ Prompt:
 Current first target:
 - keep `MSAA_SAMPLES=1` as the low-latency benchmark baseline and `MSAA_SAMPLES=4` as the quality-control comparison
 - the simplified terrain `relief_shading()` path in `src/shaders/attachments.wgsl` is now the accepted baseline because it moved the Swiss sweep from about `60.97 FPS / 16.40 ms mean / 25.21 ms p95` to about `99.55 FPS / 10.05 ms mean / 15.23 ms p95`
-- next work should isolate terrain depth textures, terrain depth copy, and remaining main-opaque-pass cost rather than returning to upload heuristics prematurely
+- reusing terrain depth textures across frames improved the default Swiss low-latency path further to about `103.76 FPS / 9.64 ms mean / 14.39 ms p95`
+- terrain blending was measured as a modest but non-compelling win and is not the next accepted default change
+- next work should isolate terrain depth copy and remaining main-opaque-pass cost rather than returning to upload heuristics prematurely
 
 ### O4: Integration And Merge Gate Verification
 Skill: `terrain-release-verifier`
@@ -131,12 +133,11 @@ Prompt:
 - current Earth `lod_count = 5` build is close to the dataset floor in flat/coastal regions
 - rebuilt Swiss overlay is in the `~13-20 m` p95 class against its source raster in the local HGT-overlap strip
 - Swiss renderer low-latency benchmark baseline from the capture-validated sweep:
-  - artifacts: `/tmp/swiss_msaa1_relief_fast.json`
-  - FPS mean `99.55`
-  - frame mean `10.05 ms`
-  - p95 `15.23 ms`
-  - p99 `19.09 ms`
-  - max `24.93 ms`
+  - artifacts: `/tmp/terrain_depth_cache_confirm/summary.txt`
+  - FPS mean `103.76`
+  - frame mean `9.64 ms`
+  - p95 `14.39 ms`
+  - p99 `17.31 ms`
 - Swiss quality-control comparison:
   - artifacts: `/tmp/terrain_bench_msaa4_isolation/summary.txt`
   - FPS mean `36.86`

@@ -117,10 +117,12 @@ pub struct TerrainViewDepthTexture {
     pub view: TextureView,
     pub depth_view: TextureView,
     pub stencil_view: TextureView,
+    physical_target_size: UVec2,
+    sample_count: u32,
 }
 
 impl TerrainViewDepthTexture {
-    pub fn new(texture: CachedTexture) -> Self {
+    pub fn new(texture: CachedTexture, physical_target_size: UVec2, sample_count: u32) -> Self {
         let depth_view = texture.texture.create_view(&TextureViewDescriptor {
             aspect: TextureAspect::DepthOnly,
             ..default()
@@ -135,7 +137,13 @@ impl TerrainViewDepthTexture {
             view: texture.default_view,
             depth_view,
             stencil_view,
+            physical_target_size,
+            sample_count,
         }
+    }
+
+    pub fn matches(&self, physical_target_size: UVec2, sample_count: u32) -> bool {
+        self.physical_target_size == physical_target_size && self.sample_count == sample_count
     }
 
     pub fn get_attachment(&self) -> RenderPassDepthStencilAttachment<'_> {
@@ -157,14 +165,20 @@ pub fn prepare_terrain_depth_textures(
     mut commands: Commands,
     mut texture_cache: ResMut<TextureCache>,
     device: Res<RenderDevice>,
-    views_3d: Query<(Entity, &ExtractedCamera, &Msaa)>,
+    views_3d: Query<(Entity, &ExtractedCamera, &Msaa, Option<&TerrainViewDepthTexture>)>,
     perf_telemetry: Res<TerrainPerfTelemetry>,
 ) {
     let start = Instant::now();
-    for (view, camera, msaa) in &views_3d {
+    for (view, camera, msaa, existing_depth_texture) in &views_3d {
         let Some(physical_target_size) = camera.physical_target_size else {
             continue;
         };
+
+        if existing_depth_texture.is_some_and(|depth| {
+            depth.matches(physical_target_size, msaa.samples())
+        }) {
+            continue;
+        }
 
         let descriptor = TextureDescriptor {
             label: Some("view_depth_texture"),
@@ -185,7 +199,11 @@ pub fn prepare_terrain_depth_textures(
 
         commands
             .entity(view)
-            .insert(TerrainViewDepthTexture::new(cached_texture));
+            .insert(TerrainViewDepthTexture::new(
+                cached_texture,
+                physical_target_size,
+                msaa.samples(),
+            ));
     }
     perf_telemetry.record_duration(PHASE_RENDER_PREPARE_DEPTH_TEXTURES, start.elapsed());
 }
