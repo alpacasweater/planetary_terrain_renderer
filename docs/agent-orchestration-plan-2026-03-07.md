@@ -17,20 +17,62 @@ Bring `planetary_terrain_renderer` to a state where it is:
 
 | Task | Agent focus | Skill | Branch suggestion | Depends on |
 |---|---|---|---|---|
-| O1 | Tile scheduling and backlog smoothing | `terrain-streaming-optimizer` | `codex/streaming-optimizer` | none |
-| O2 | Render and extract churn reduction | `terrain-render-path-optimizer` | `codex/render-path-optimizer` | none |
-| O3 | GPU and benchmark attribution hardening | `terrain-benchmark-profiler` | `codex/benchmark-profiler` | none |
-| O4 | Optimization safety verification | `terrain-release-verifier` | `codex/release-verifier` | O1, O2, O3 |
+| O1 | Benchmark contract and GPU attribution hardening | `terrain-benchmark-profiler` | `codex/benchmark-profiler` | none |
+| O2 | Tile scheduling and backlog smoothing | `terrain-streaming-optimizer` | `codex/streaming-optimizer` | O1 |
+| O3 | Render and extract churn reduction | `terrain-render-path-optimizer` | `codex/render-path-optimizer` | O1 |
+| O4 | Optimization safety verification | `terrain-release-verifier` | `codex/release-verifier` | O2, O3 |
 
 ## Execution Order
 
-1. Launch O1, O2, and O3 in parallel against the same cleaned benchmark baseline.
-2. Require every optimization agent to preserve the current correctness and capture-validation gates.
-3. Launch O4 only after O1-O3 have published before/after artifacts.
+1. Execute O1 first. Do not start optimization until the benchmark contract, scenario labeling, and attribution path are stable.
+2. O1 is now materially complete: scenario labeling, capture validation, measurement-window resets, and CPU-side phase attribution are live.
+3. Launch O2 and O3 only after O1 has published the canonical scenario matrix and artifact format.
+4. Require every optimization agent to preserve the current correctness and capture-validation gates.
+5. Launch O4 only after O2-O3 have published before/after artifacts.
+
+## Ownership Boundaries
+
+- O1 owns benchmark/example/script/docs changes:
+  - `examples/spherical_multires.rs`
+  - `scripts/benchmark_spherical_multires.sh`
+  - benchmark docs and findings
+- O2 owns streaming and upload behavior:
+  - `src/terrain_data/tile_loader.rs`
+  - `src/terrain_data/tile_atlas.rs`
+  - `src/terrain_data/gpu_tile_atlas.rs`
+- O3 owns render and extraction churn:
+  - `src/render/terrain_view_bind_group.rs`
+  - `src/terrain_data/tile_tree.rs`
+  - other render-path files only if needed
+
+If a task needs to cross these boundaries, it must first update the plan and explain why the overlap is unavoidable.
 
 ## Task Packets
 
-### O1: Tile Scheduling And Upload Smoothing
+### O1: Benchmark Contract And GPU Attribution Hardening
+Skill: `terrain-benchmark-profiler`
+Goal:
+- make optimization decisions reproducible and scenario-stable
+Deliverables:
+- canonical scenario naming and artifact schema
+- canonical scenario matrix covering both performance and close-up visual validation
+- capture validation in the benchmark wrapper
+- pass-level or at least stronger phase-level attribution path
+- refreshed baseline table with p95, p99, max, outlier counts, and memory watermark
+Acceptance:
+- optimization work can point to stable named scenarios and richer telemetry, not only frame-wide totals
+- benchmark captures remain nonblank and required artifacts are enforced
+- the canonical matrix includes at least:
+  - a heavy-overlay moving sweep latency scenario
+  - a heavy-overlay close-up visual smoke scenario
+  - a base-only control scenario
+- current status:
+  - complete enough to gate O2 and O3
+  - remaining gap is true GPU execution timing, not CPU-side phase attribution
+Prompt:
+- Extend the current benchmark and profiling workflow in `planetary_terrain_renderer` so the next optimization pass has a stable benchmark contract and richer attribution. Keep the benchmark renderer-focused and preserve capture validation.
+
+### O2: Tile Scheduling And Upload Smoothing
 Skill: `terrain-streaming-optimizer`
 Goal:
 - reduce tile churn and upload burstiness on the heavy overlay case
@@ -39,13 +81,18 @@ Deliverables:
 - scheduling or residency changes
 - before/after benchmark table for `swiss`
 Acceptance:
-- `swiss` p95 improves toward `< 25 ms`
-- `swiss` p99 improves toward `< 33 ms`
+- `swiss` moving-sweep p95 improves toward `< 25 ms`
+- `swiss` moving-sweep p99 improves toward `< 33 ms`
 - no correctness metric regression
 Prompt:
 - Optimize the terrain streaming path in `planetary_terrain_renderer`. Focus on prioritization, hysteresis, cancellation, upload budgeting, and atlas residency. Do not change geodesy or dataset semantics.
+Current first target:
+- `render.prepare.gpu_tile_atlas.uploads` is the hottest measured CPU phase in the Swiss sweep
+- higher default upload budget (`24 MB/frame`) is the first validated tuning change
+- upload-priority reordering was tested and rejected on the Swiss heavy-overlay baseline
+- next work should pivot to GPU trace attribution using the new Metal capture path, then return to upload or staging changes only if the trace points back there
 
-### O2: Render-Path Churn Reduction
+### O3: Render-Path Churn Reduction
 Skill: `terrain-render-path-optimizer`
 Goal:
 - remove avoidable per-frame buffer writes, bind-group rebuilds, and resource churn
@@ -58,20 +105,6 @@ Acceptance:
 - benchmark p95 or p99 improves without visual regressions
 Prompt:
 - Optimize the render and extraction path in `planetary_terrain_renderer` using the existing CPU profile as a starting point. Focus on persistent bind groups, reduced full-buffer rewrites, and resource lifetime improvements. Keep benchmark captures validating rendered terrain.
-
-### O3: GPU And Benchmark Attribution Hardening
-Skill: `terrain-benchmark-profiler`
-Goal:
-- turn the benchmark into a better optimization decision tool
-Deliverables:
-- GPU timing or capture-backed attribution path
-- explicit benchmark recipe for throughput and latency sweeps
-- refreshed baseline table if measurements materially change
-Acceptance:
-- optimization work can point to named costly passes or upload phases, not only frame-wide totals
-- benchmark captures remain nonblank
-Prompt:
-- Extend the current benchmark and profiling workflow in `planetary_terrain_renderer` so the next optimization pass has real GPU or pass-level attribution. Keep the benchmark renderer-focused and preserve capture validation.
 
 ### O4: Integration And Merge Gate Verification
 Skill: `terrain-release-verifier`
@@ -100,6 +133,6 @@ Prompt:
 
 ## Still Relevant Risks
 
-- missing GPU pass attribution means optimization is still partly guided by inference
+- missing true GPU pass attribution still means some optimization choices are guided by inference
 - the heaviest overlay case still has visible tail-latency headroom
 - local `small_world` coverage for mountainous truth work is still geographically narrow

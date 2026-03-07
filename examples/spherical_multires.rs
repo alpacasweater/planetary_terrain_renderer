@@ -1,5 +1,7 @@
 use bevy::app::AppExit;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+#[cfg(feature = "metal_capture")]
+use bevy::diagnostic::FrameCount;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::shader::ShaderRef;
 use bevy::time::Real;
@@ -10,7 +12,10 @@ use bevy_terrain::math::{
     Coordinate,
     geodesy::{LlaHae, Ned, ecef_to_lla_hae, ned_to_ecef, unit_from_lat_lon_degrees},
 };
+use bevy_terrain::perf::{TerrainPerfSnapshot, TerrainPerfTelemetry};
 use bevy_terrain::prelude::*;
+#[cfg(feature = "metal_capture")]
+use bevy_terrain::debug::{FrameCapture, MetalCapturePlugin};
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,10 +33,15 @@ const BENCHMARK_OUTPUT_ENV: &str = "MULTIRES_BENCHMARK_OUTPUT";
 const BENCHMARK_WARMUP_ENV: &str = "MULTIRES_BENCHMARK_WARMUP_SECONDS";
 const BENCHMARK_DURATION_ENV: &str = "MULTIRES_BENCHMARK_DURATION_SECONDS";
 const BENCHMARK_READY_TIMEOUT_ENV: &str = "MULTIRES_BENCHMARK_READY_TIMEOUT_SECONDS";
+const BENCHMARK_SCENARIO_ENV: &str = "MULTIRES_BENCHMARK_SCENARIO";
 const BENCHMARK_SWEEP_DEG_ENV: &str = "MULTIRES_BENCHMARK_SWEEP_DEG";
 const BENCHMARK_SWEEP_PERIOD_ENV: &str = "MULTIRES_BENCHMARK_SWEEP_PERIOD_SECONDS";
 const CAPTURE_DIR_ENV: &str = "MULTIRES_CAPTURE_DIR";
 const CAPTURE_FRAMES_ENV: &str = "MULTIRES_CAPTURE_FRAMES";
+#[cfg(feature = "metal_capture")]
+const METAL_CAPTURE_FRAME_ENV: &str = "MULTIRES_METAL_CAPTURE_FRAME";
+#[cfg(feature = "metal_capture")]
+const METAL_CAPTURE_DIR_ENV: &str = "MULTIRES_METAL_CAPTURE_DIR";
 const ENABLE_DEBUG_TOOLS_ENV: &str = "MULTIRES_ENABLE_DEBUG_TOOLS";
 const ENABLE_PERF_TITLE_ENV: &str = "MULTIRES_ENABLE_PERF_TITLE";
 const UPLOAD_BUDGET_MB_ENV: &str = "MULTIRES_UPLOAD_BUDGET_MB";
@@ -77,6 +87,7 @@ impl Default for PerfTitleState {
 #[derive(Resource)]
 struct BenchmarkConfig {
     output_path: PathBuf,
+    scenario_name: String,
     warmup_s: f64,
     duration_s: f64,
     ready_timeout_s: f64,
@@ -118,6 +129,14 @@ struct RuntimeMode {
     perf_title_enabled: bool,
 }
 
+#[cfg(feature = "metal_capture")]
+#[derive(Resource, Clone)]
+struct MetalCaptureConfig {
+    frame: u32,
+    output_dir: PathBuf,
+    label: String,
+}
+
 #[derive(Default)]
 struct CaptureState {
     frame_index: u32,
@@ -130,6 +149,7 @@ struct BenchmarkRuntime {
     warmup_elapsed_s: f64,
     measure_elapsed_s: f64,
     status_log_elapsed_s: f64,
+    measurement_window_started: bool,
     saw_ready_once: bool,
     ready_atlas_count: usize,
     ready_loaded_atlas_count: usize,
@@ -139,6 +159,9 @@ struct BenchmarkRuntime {
 }
 
 struct BenchmarkSummary {
+    scenario_name: String,
+    overlays: String,
+    present_mode: String,
     focus_label: String,
     focus_lat_deg: f64,
     focus_lon_deg: f64,
@@ -160,8 +183,20 @@ struct BenchmarkSummary {
     frame_ms_p95: f64,
     frame_ms_p99: f64,
     frame_ms_max: f64,
+    frame_over_25ms_count: usize,
+    frame_over_33ms_count: usize,
+    frame_over_50ms_count: usize,
     latency_estimate_ms: f64,
+    peak_rss_kib: u64,
+    benchmark_sweep_deg: f64,
+    benchmark_sweep_period_s: f64,
+    drone_enabled: bool,
+    hottest_phase_name: String,
+    hottest_phase_mean_ms: f64,
+    hottest_phase_p95_ms: f64,
+    hottest_phase_max_ms: f64,
     upload_budget_bytes_per_frame: usize,
+    phase_timings: TerrainPerfSnapshot,
     terrain_view_buffer_updates_total: u64,
     tile_tree_buffer_updates_total: u64,
     tile_tree_buffer_skipped_total: u64,
@@ -176,6 +211,7 @@ struct BenchmarkSummary {
     peak_pending_attachment_queue: usize,
     peak_inflight_attachment_loads: usize,
     peak_upload_backlog_attachment_tiles: usize,
+    canceled_stale_upload_attachment_tiles_total: u64,
 }
 
 #[derive(Component)]
@@ -209,7 +245,7 @@ fn main() {
     let benchmark_mode = benchmark_mode_enabled();
     let debug_tools_enabled = env_bool(ENABLE_DEBUG_TOOLS_ENV, !benchmark_mode);
     let perf_title_enabled = env_bool(ENABLE_PERF_TITLE_ENV, !benchmark_mode);
-    let upload_budget_mb = env_usize(UPLOAD_BUDGET_MB_ENV, 16);
+    let upload_budget_mb = env_usize(UPLOAD_BUDGET_MB_ENV, 24);
     let upload_budget_bytes_per_frame = if upload_budget_mb == 0 {
         0
     } else {
@@ -237,6 +273,10 @@ fn main() {
     if debug_tools_enabled {
         app.add_plugins((TerrainDebugPlugin, TerrainPickingPlugin));
     }
+    #[cfg(feature = "metal_capture")]
+    if metal_capture_config_from_env().is_some() && !debug_tools_enabled {
+        app.add_plugins(MetalCapturePlugin);
+    }
 
     app.insert_resource(
         TerrainSettings::new(vec!["albedo"])
@@ -259,6 +299,11 @@ fn main() {
                 run_benchmark,
             ),
         );
+    #[cfg(feature = "metal_capture")]
+    if let Some(config) = metal_capture_config_from_env() {
+        app.insert_resource(config)
+            .add_systems(Update, schedule_metal_capture);
+    }
 
     if perf_title_enabled {
         app.add_systems(Update, update_perf_title);
@@ -438,7 +483,7 @@ fn sample_source_raster_wgs84(source_raster: &Path, lat_deg: f64, lon_deg: f64) 
 }
 
 fn build_demo_drone_orbit(preset: OverlayPreset) -> Option<DemoDroneOrbit> {
-    if !env_bool(ENABLE_DRONE_ENV, true) {
+    if !env_bool(ENABLE_DRONE_ENV, !benchmark_mode_enabled()) {
         return None;
     }
 
@@ -546,12 +591,37 @@ fn benchmark_config_from_env() -> Option<BenchmarkConfig> {
     let warmup_s = env_f64(BENCHMARK_WARMUP_ENV, 8.0).max(0.0);
     let duration_s = env_f64(BENCHMARK_DURATION_ENV, 20.0).max(1.0);
     let ready_timeout_s = env_f64(BENCHMARK_READY_TIMEOUT_ENV, 120.0).max(1.0);
+    let scenario_name = env::var(BENCHMARK_SCENARIO_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "unnamed".to_string());
 
     Some(BenchmarkConfig {
         output_path: PathBuf::from(output),
+        scenario_name,
         warmup_s,
         duration_s,
         ready_timeout_s,
+    })
+}
+
+#[cfg(feature = "metal_capture")]
+fn metal_capture_config_from_env() -> Option<MetalCaptureConfig> {
+    let frame = env::var(METAL_CAPTURE_FRAME_ENV).ok()?.trim().parse().ok()?;
+    let output_dir = env::var(METAL_CAPTURE_DIR_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("captures"));
+    let label = env::var(BENCHMARK_SCENARIO_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "metal_capture".to_string());
+
+    Some(MetalCaptureConfig {
+        frame,
+        output_dir,
+        label,
     })
 }
 
@@ -638,6 +708,7 @@ fn initialize(
     mut images: ResMut<LoadingImages>,
     asset_server: Res<AssetServer>,
     mode: Res<RuntimeMode>,
+    perf_telemetry: Res<TerrainPerfTelemetry>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut standard_materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -646,6 +717,10 @@ fn initialize(
 
     let benchmark_config = benchmark_config_from_env();
     let benchmark_enabled = benchmark_config.is_some();
+    perf_telemetry.set_enabled(benchmark_enabled);
+    if benchmark_enabled {
+        perf_telemetry.reset();
+    }
     if let Some(config) = benchmark_config {
         info!(
             target: "perf",
@@ -929,6 +1004,26 @@ fn animate_demo_drone(
     }
 }
 
+#[cfg(feature = "metal_capture")]
+fn schedule_metal_capture(
+    frames: Res<FrameCount>,
+    config: Res<MetalCaptureConfig>,
+    mut capture: ResMut<FrameCapture>,
+) {
+    let should_capture = frames.0 == config.frame;
+    capture.capture = should_capture;
+    if should_capture {
+        capture.output_dir = Some(config.output_dir.clone());
+        capture.label = Some(config.label.clone());
+        info!(
+            target: "perf",
+            "requesting metal capture at frame {} -> {}",
+            config.frame,
+            config.output_dir.display()
+        );
+    }
+}
+
 fn finish_loading_images_local(
     asset_server: Res<AssetServer>,
     mut loading_images: ResMut<LoadingImages>,
@@ -1047,6 +1142,49 @@ fn compute_percentile(sorted_samples: &[f64], percentile: f64) -> f64 {
     sorted_samples[index]
 }
 
+fn peak_rss_kib() -> u64 {
+    #[cfg(unix)]
+    {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+        // SAFETY: `getrusage` initializes the provided `rusage` on success.
+        let result = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+        if result == 0 {
+            let usage = unsafe { usage.assume_init() };
+            #[cfg(target_os = "macos")]
+            {
+                return (usage.ru_maxrss as u64).saturating_div(1024);
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                return usage.ru_maxrss as u64;
+            }
+        }
+    }
+    0
+}
+
+fn phase_timings_json_fragment(snapshot: &TerrainPerfSnapshot) -> String {
+    let mut lines = Vec::new();
+    for phase in &snapshot.phase_timings {
+        let name = phase.name.replace('"', "'");
+        lines.push(format!(
+            "    \"{name}\": {{ \"sample_count\": {sample_count}, \"mean_ms\": {mean_ms:.6}, \"p95_ms\": {p95_ms:.6}, \"p99_ms\": {p99_ms:.6}, \"max_ms\": {max_ms:.6} }}",
+            name = name,
+            sample_count = phase.sample_count,
+            mean_ms = phase.mean_ms,
+            p95_ms = phase.p95_ms,
+            p99_ms = phase.p99_ms,
+            max_ms = phase.max_ms,
+        ));
+    }
+
+    if lines.is_empty() {
+        "{}".to_string()
+    } else {
+        format!("{{\n{}\n  }}", lines.join(",\n"))
+    }
+}
+
 fn compute_summary(
     config: &BenchmarkConfig,
     samples_ms: &[f64],
@@ -1055,6 +1193,7 @@ fn compute_summary(
     mode: &RuntimeMode,
     runtime: &BenchmarkRuntime,
     settings: &TerrainSettings,
+    phase_timings: TerrainPerfSnapshot,
     tile_tree_perf_counters: impl IntoIterator<Item = TileTreePerfCounters>,
     tile_atlas_perf_counters: impl IntoIterator<Item = TileAtlasPerfCounters>,
 ) -> Option<BenchmarkSummary> {
@@ -1074,6 +1213,9 @@ fn compute_summary(
     let frame_ms_p90 = compute_percentile(&sorted, 0.90);
     let frame_ms_p95 = compute_percentile(&sorted, 0.95);
     let frame_ms_p99 = compute_percentile(&sorted, 0.99);
+    let frame_over_25ms_count = samples_ms.iter().filter(|&&frame_ms| frame_ms > 25.0).count();
+    let frame_over_33ms_count = samples_ms.iter().filter(|&&frame_ms| frame_ms > 33.0).count();
+    let frame_over_50ms_count = samples_ms.iter().filter(|&&frame_ms| frame_ms > 50.0).count();
     let fps_mean = if frame_ms_mean > 0.0 {
         1000.0 / frame_ms_mean
     } else {
@@ -1085,6 +1227,9 @@ fn compute_summary(
     } else {
         ("global".to_string(), 0.0, 0.0)
     };
+    let benchmark_sweep_deg = env_f64(BENCHMARK_SWEEP_DEG_ENV, 8.0).max(0.0);
+    let benchmark_sweep_period_s = env_f64(BENCHMARK_SWEEP_PERIOD_ENV, 40.0).max(2.0);
+    let hottest_phase = phase_timings.hottest_by_p95().cloned();
 
     let mut tile_tree_perf = TileTreePerfCounters::default();
     for counters in tile_tree_perf_counters {
@@ -1102,6 +1247,8 @@ fn compute_summary(
             counters.canceled_pending_attachment_loads_total;
         perf.canceled_inflight_attachment_loads_total +=
             counters.canceled_inflight_attachment_loads_total;
+        perf.canceled_stale_upload_attachment_tiles_total +=
+            counters.canceled_stale_upload_attachment_tiles_total;
         perf.finished_attachment_loads_total += counters.finished_attachment_loads_total;
         perf.upload_enqueued_attachment_tiles_total +=
             counters.upload_enqueued_attachment_tiles_total;
@@ -1120,6 +1267,9 @@ fn compute_summary(
     }
 
     Some(BenchmarkSummary {
+        scenario_name: config.scenario_name.clone(),
+        overlays: env::var(OVERLAY_ENV).unwrap_or_else(|_| DEFAULT_OVERLAY_KEYS.join(",")),
+        present_mode: env::var(PRESENT_MODE_ENV).unwrap_or_else(|_| "auto_vsync".to_string()),
         focus_label,
         focus_lat_deg,
         focus_lon_deg,
@@ -1141,8 +1291,23 @@ fn compute_summary(
         frame_ms_p95,
         frame_ms_p99,
         frame_ms_max,
+        frame_over_25ms_count,
+        frame_over_33ms_count,
+        frame_over_50ms_count,
         latency_estimate_ms: frame_ms_p95,
+        peak_rss_kib: peak_rss_kib(),
+        benchmark_sweep_deg,
+        benchmark_sweep_period_s,
+        drone_enabled: env_bool(ENABLE_DRONE_ENV, !benchmark_mode_enabled()),
+        hottest_phase_name: hottest_phase
+            .as_ref()
+            .map(|phase| phase.name.clone())
+            .unwrap_or_else(|| "none".to_string()),
+        hottest_phase_mean_ms: hottest_phase.as_ref().map(|phase| phase.mean_ms).unwrap_or(0.0),
+        hottest_phase_p95_ms: hottest_phase.as_ref().map(|phase| phase.p95_ms).unwrap_or(0.0),
+        hottest_phase_max_ms: hottest_phase.as_ref().map(|phase| phase.max_ms).unwrap_or(0.0),
         upload_budget_bytes_per_frame: settings.upload_budget_bytes_per_frame,
+        phase_timings,
         terrain_view_buffer_updates_total: tile_tree_perf.terrain_view_buffer_updates_total,
         tile_tree_buffer_updates_total: tile_tree_perf.tile_tree_buffer_updates_total,
         tile_tree_buffer_skipped_total: tile_tree_perf.tile_tree_buffer_skipped_total,
@@ -1157,6 +1322,8 @@ fn compute_summary(
         peak_pending_attachment_queue: perf.peak_pending_attachment_queue,
         peak_inflight_attachment_loads: perf.peak_inflight_attachment_loads,
         peak_upload_backlog_attachment_tiles: perf.peak_upload_backlog_attachment_tiles,
+        canceled_stale_upload_attachment_tiles_total:
+            perf.canceled_stale_upload_attachment_tiles_total,
     })
 }
 
@@ -1173,10 +1340,18 @@ fn write_benchmark_outputs(
         fs::create_dir_all(parent)?;
     }
 
+    let scenario_name = summary.scenario_name.replace('"', "'");
+    let overlays = summary.overlays.replace('"', "'");
+    let present_mode = summary.present_mode.replace('"', "'");
     let focus_label = summary.focus_label.replace('"', "'");
+    let hottest_phase_name = summary.hottest_phase_name.replace('"', "'");
+    let phase_timings_json = phase_timings_json_fragment(&summary.phase_timings);
     let json = format!(
         concat!(
             "{{\n",
+            "  \"scenario_name\": \"{scenario_name}\",\n",
+            "  \"overlays\": \"{overlays}\",\n",
+            "  \"present_mode\": \"{present_mode}\",\n",
             "  \"focus_label\": \"{focus_label}\",\n",
             "  \"focus_lat_deg\": {focus_lat_deg:.6},\n",
             "  \"focus_lon_deg\": {focus_lon_deg:.6},\n",
@@ -1198,7 +1373,18 @@ fn write_benchmark_outputs(
             "  \"frame_ms_p95\": {frame_ms_p95:.6},\n",
             "  \"frame_ms_p99\": {frame_ms_p99:.6},\n",
             "  \"frame_ms_max\": {frame_ms_max:.6},\n",
+            "  \"frame_over_25ms_count\": {frame_over_25ms_count},\n",
+            "  \"frame_over_33ms_count\": {frame_over_33ms_count},\n",
+            "  \"frame_over_50ms_count\": {frame_over_50ms_count},\n",
             "  \"latency_estimate_ms\": {latency_estimate_ms:.6},\n",
+            "  \"peak_rss_kib\": {peak_rss_kib},\n",
+            "  \"benchmark_sweep_deg\": {benchmark_sweep_deg:.3},\n",
+            "  \"benchmark_sweep_period_s\": {benchmark_sweep_period_s:.3},\n",
+            "  \"drone_enabled\": {drone_enabled},\n",
+            "  \"hottest_phase_name\": \"{hottest_phase_name}\",\n",
+            "  \"hottest_phase_mean_ms\": {hottest_phase_mean_ms:.6},\n",
+            "  \"hottest_phase_p95_ms\": {hottest_phase_p95_ms:.6},\n",
+            "  \"hottest_phase_max_ms\": {hottest_phase_max_ms:.6},\n",
             "  \"upload_budget_bytes_per_frame\": {upload_budget_bytes_per_frame},\n",
             "  \"terrain_view_buffer_updates_total\": {terrain_view_buffer_updates_total},\n",
             "  \"tile_tree_buffer_updates_total\": {tile_tree_buffer_updates_total},\n",
@@ -1213,9 +1399,14 @@ fn write_benchmark_outputs(
             "  \"upload_deferred_attachment_tiles_total\": {upload_deferred_attachment_tiles_total},\n",
             "  \"peak_pending_attachment_queue\": {peak_pending_attachment_queue},\n",
             "  \"peak_inflight_attachment_loads\": {peak_inflight_attachment_loads},\n",
-            "  \"peak_upload_backlog_attachment_tiles\": {peak_upload_backlog_attachment_tiles}\n",
+            "  \"peak_upload_backlog_attachment_tiles\": {peak_upload_backlog_attachment_tiles},\n",
+            "  \"canceled_stale_upload_attachment_tiles_total\": {canceled_stale_upload_attachment_tiles_total},\n",
+            "  \"phase_timings\": {phase_timings_json}\n",
             "}}\n"
         ),
+        scenario_name = scenario_name,
+        overlays = overlays,
+        present_mode = present_mode,
         focus_label = focus_label,
         focus_lat_deg = summary.focus_lat_deg,
         focus_lon_deg = summary.focus_lon_deg,
@@ -1237,7 +1428,18 @@ fn write_benchmark_outputs(
         frame_ms_p95 = summary.frame_ms_p95,
         frame_ms_p99 = summary.frame_ms_p99,
         frame_ms_max = summary.frame_ms_max,
+        frame_over_25ms_count = summary.frame_over_25ms_count,
+        frame_over_33ms_count = summary.frame_over_33ms_count,
+        frame_over_50ms_count = summary.frame_over_50ms_count,
         latency_estimate_ms = summary.latency_estimate_ms,
+        peak_rss_kib = summary.peak_rss_kib,
+        benchmark_sweep_deg = summary.benchmark_sweep_deg,
+        benchmark_sweep_period_s = summary.benchmark_sweep_period_s,
+        drone_enabled = summary.drone_enabled,
+        hottest_phase_name = hottest_phase_name,
+        hottest_phase_mean_ms = summary.hottest_phase_mean_ms,
+        hottest_phase_p95_ms = summary.hottest_phase_p95_ms,
+        hottest_phase_max_ms = summary.hottest_phase_max_ms,
         upload_budget_bytes_per_frame = summary.upload_budget_bytes_per_frame,
         terrain_view_buffer_updates_total = summary.terrain_view_buffer_updates_total,
         tile_tree_buffer_updates_total = summary.tile_tree_buffer_updates_total,
@@ -1257,27 +1459,35 @@ fn write_benchmark_outputs(
         peak_pending_attachment_queue = summary.peak_pending_attachment_queue,
         peak_inflight_attachment_loads = summary.peak_inflight_attachment_loads,
         peak_upload_backlog_attachment_tiles = summary.peak_upload_backlog_attachment_tiles,
+        canceled_stale_upload_attachment_tiles_total =
+            summary.canceled_stale_upload_attachment_tiles_total,
+        phase_timings_json = phase_timings_json,
     );
     fs::write(&json_path, json)?;
 
+    let overlays_csv = overlays.replace(',', "+");
     let csv = format!(
         concat!(
-            "focus_label,focus_lat_deg,focus_lon_deg,benchmark_mode,debug_tools_enabled,perf_title_enabled,warmup_s,duration_s,sample_count,",
+            "scenario_name,overlays,present_mode,focus_label,focus_lat_deg,focus_lon_deg,benchmark_mode,debug_tools_enabled,perf_title_enabled,warmup_s,duration_s,sample_count,",
             "ready_wait_s,",
             "ready_atlas_count,ready_loaded_atlas_count,ready_loaded_tile_total,",
-            "fps_mean,frame_ms_mean,frame_ms_min,frame_ms_p50,frame_ms_p90,frame_ms_p95,frame_ms_p99,frame_ms_max,latency_estimate_ms,",
+            "fps_mean,frame_ms_mean,frame_ms_min,frame_ms_p50,frame_ms_p90,frame_ms_p95,frame_ms_p99,frame_ms_max,frame_over_25ms_count,frame_over_33ms_count,frame_over_50ms_count,latency_estimate_ms,peak_rss_kib,benchmark_sweep_deg,benchmark_sweep_period_s,drone_enabled,",
+            "hottest_phase_name,hottest_phase_mean_ms,hottest_phase_p95_ms,hottest_phase_max_ms,",
             "upload_budget_bytes_per_frame,terrain_view_buffer_updates_total,tile_tree_buffer_updates_total,tile_tree_buffer_skipped_total,",
             "tile_requests_total,tile_releases_total,canceled_pending_attachment_loads_total,canceled_inflight_attachment_loads_total,",
             "finished_attachment_loads_total,upload_enqueued_attachment_tiles_total,upload_enqueued_bytes_total,upload_deferred_attachment_tiles_total,",
-            "peak_pending_attachment_queue,peak_inflight_attachment_loads,peak_upload_backlog_attachment_tiles\n",
-            "\"{focus_label}\",{focus_lat_deg:.6},{focus_lon_deg:.6},{benchmark_mode},{debug_tools_enabled},{perf_title_enabled},{warmup_s:.3},{duration_s:.3},{sample_count},{ready_wait_s:.3},",
+            "peak_pending_attachment_queue,peak_inflight_attachment_loads,peak_upload_backlog_attachment_tiles,canceled_stale_upload_attachment_tiles_total\n",
+            "\"{scenario_name}\",\"{overlays_csv}\",\"{present_mode}\",\"{focus_label}\",{focus_lat_deg:.6},{focus_lon_deg:.6},{benchmark_mode},{debug_tools_enabled},{perf_title_enabled},{warmup_s:.3},{duration_s:.3},{sample_count},{ready_wait_s:.3},",
             "{ready_atlas_count},{ready_loaded_atlas_count},{ready_loaded_tile_total},",
-            "{fps_mean:.6},{frame_ms_mean:.6},{frame_ms_min:.6},{frame_ms_p50:.6},{frame_ms_p90:.6},{frame_ms_p95:.6},{frame_ms_p99:.6},{frame_ms_max:.6},{latency_estimate_ms:.6},",
+            "{fps_mean:.6},{frame_ms_mean:.6},{frame_ms_min:.6},{frame_ms_p50:.6},{frame_ms_p90:.6},{frame_ms_p95:.6},{frame_ms_p99:.6},{frame_ms_max:.6},{frame_over_25ms_count},{frame_over_33ms_count},{frame_over_50ms_count},{latency_estimate_ms:.6},{peak_rss_kib},{benchmark_sweep_deg:.3},{benchmark_sweep_period_s:.3},{drone_enabled},\"{hottest_phase_name}\",{hottest_phase_mean_ms:.6},{hottest_phase_p95_ms:.6},{hottest_phase_max_ms:.6},",
             "{upload_budget_bytes_per_frame},{terrain_view_buffer_updates_total},{tile_tree_buffer_updates_total},{tile_tree_buffer_skipped_total},",
             "{tile_requests_total},{tile_releases_total},{canceled_pending_attachment_loads_total},{canceled_inflight_attachment_loads_total},",
             "{finished_attachment_loads_total},{upload_enqueued_attachment_tiles_total},{upload_enqueued_bytes_total},{upload_deferred_attachment_tiles_total},",
-            "{peak_pending_attachment_queue},{peak_inflight_attachment_loads},{peak_upload_backlog_attachment_tiles}\n"
+            "{peak_pending_attachment_queue},{peak_inflight_attachment_loads},{peak_upload_backlog_attachment_tiles},{canceled_stale_upload_attachment_tiles_total}\n"
         ),
+        scenario_name = scenario_name,
+        overlays_csv = overlays_csv,
+        present_mode = present_mode,
         focus_label = focus_label,
         focus_lat_deg = summary.focus_lat_deg,
         focus_lon_deg = summary.focus_lon_deg,
@@ -1299,7 +1509,18 @@ fn write_benchmark_outputs(
         frame_ms_p95 = summary.frame_ms_p95,
         frame_ms_p99 = summary.frame_ms_p99,
         frame_ms_max = summary.frame_ms_max,
+        frame_over_25ms_count = summary.frame_over_25ms_count,
+        frame_over_33ms_count = summary.frame_over_33ms_count,
+        frame_over_50ms_count = summary.frame_over_50ms_count,
         latency_estimate_ms = summary.latency_estimate_ms,
+        peak_rss_kib = summary.peak_rss_kib,
+        benchmark_sweep_deg = summary.benchmark_sweep_deg,
+        benchmark_sweep_period_s = summary.benchmark_sweep_period_s,
+        drone_enabled = summary.drone_enabled,
+        hottest_phase_name = hottest_phase_name,
+        hottest_phase_mean_ms = summary.hottest_phase_mean_ms,
+        hottest_phase_p95_ms = summary.hottest_phase_p95_ms,
+        hottest_phase_max_ms = summary.hottest_phase_max_ms,
         upload_budget_bytes_per_frame = summary.upload_budget_bytes_per_frame,
         terrain_view_buffer_updates_total = summary.terrain_view_buffer_updates_total,
         tile_tree_buffer_updates_total = summary.tile_tree_buffer_updates_total,
@@ -1319,6 +1540,8 @@ fn write_benchmark_outputs(
         peak_pending_attachment_queue = summary.peak_pending_attachment_queue,
         peak_inflight_attachment_loads = summary.peak_inflight_attachment_loads,
         peak_upload_backlog_attachment_tiles = summary.peak_upload_backlog_attachment_tiles,
+        canceled_stale_upload_attachment_tiles_total =
+            summary.canceled_stale_upload_attachment_tiles_total,
     );
     fs::write(&csv_path, csv)?;
 
@@ -1332,8 +1555,9 @@ fn run_benchmark(
     focus: Option<Res<CameraFocus>>,
     mode: Res<RuntimeMode>,
     settings: Res<TerrainSettings>,
-    tile_trees: Res<TerrainViewComponents<TileTree>>,
-    tile_atlases: Query<&TileAtlas>,
+    perf_telemetry: Res<TerrainPerfTelemetry>,
+    mut tile_trees: ResMut<TerrainViewComponents<TileTree>>,
+    mut tile_atlases: Query<&mut TileAtlas>,
     mut runtime: Local<BenchmarkRuntime>,
     mut app_exit: MessageWriter<AppExit>,
 ) {
@@ -1414,9 +1638,17 @@ fn run_benchmark(
         .and_then(|diagnostic| diagnostic.smoothed())
         .unwrap_or(time.delta_secs_f64() * 1000.0);
 
-    if runtime.warmup_elapsed_s < config.warmup_s {
+    if !runtime.measurement_window_started && runtime.warmup_elapsed_s < config.warmup_s {
         runtime.warmup_elapsed_s += delta_s;
         if runtime.warmup_elapsed_s >= config.warmup_s {
+            perf_telemetry.reset();
+            for tile_tree in tile_trees.values_mut() {
+                tile_tree.reset_perf_counters();
+            }
+            for mut tile_atlas in &mut tile_atlases {
+                tile_atlas.reset_perf_counters();
+            }
+            runtime.measurement_window_started = true;
             info!(
                 target: "perf",
                 "benchmark warmup_complete waited_s={:.2} warmup_s={:.2}; starting measurement {:.2}s",
@@ -1426,6 +1658,24 @@ fn run_benchmark(
             );
         }
         return;
+    }
+
+    if !runtime.measurement_window_started {
+        perf_telemetry.reset();
+        for tile_tree in tile_trees.values_mut() {
+            tile_tree.reset_perf_counters();
+        }
+        for mut tile_atlas in &mut tile_atlases {
+            tile_atlas.reset_perf_counters();
+        }
+        runtime.measurement_window_started = true;
+        info!(
+            target: "perf",
+            "benchmark warmup_complete waited_s={:.2} warmup_s={:.2}; starting measurement {:.2}s",
+            runtime.ready_wait_s,
+            config.warmup_s,
+            config.duration_s
+        );
     }
 
     runtime.measure_elapsed_s += delta_s;
@@ -1443,6 +1693,7 @@ fn run_benchmark(
         &mode,
         &runtime,
         &settings,
+        perf_telemetry.snapshot(),
         tile_trees.values().map(|tile_tree| tile_tree.perf_counters()),
         tile_atlases.iter().map(|tile_atlas| tile_atlas.perf_counters()),
     ) {
@@ -1463,12 +1714,17 @@ fn run_benchmark(
         Ok((json_path, csv_path)) => {
             info!(
                 target: "perf",
-                "benchmark complete: samples={} fps_mean={:.2} frame_ms_mean={:.3} p95_ms={:.3} latency_est_ms={:.3} ready_atlases={}/{} loaded_tiles={} uploads={} deferred_uploads={} json={} csv={}",
+                "benchmark complete: scenario={} samples={} fps_mean={:.2} frame_ms_mean={:.3} p95_ms={:.3} p99_ms={:.3} latency_est_ms={:.3} peak_rss_kib={} hottest_phase={} hottest_phase_p95_ms={:.3} ready_atlases={}/{} loaded_tiles={} uploads={} deferred_uploads={} json={} csv={}",
+                summary.scenario_name,
                 summary.sample_count,
                 summary.fps_mean,
                 summary.frame_ms_mean,
                 summary.frame_ms_p95,
+                summary.frame_ms_p99,
                 summary.latency_estimate_ms,
+                summary.peak_rss_kib,
+                summary.hottest_phase_name,
+                summary.hottest_phase_p95_ms,
                 summary.ready_loaded_atlas_count,
                 summary.ready_atlas_count,
                 summary.ready_loaded_tile_total,

@@ -5,7 +5,7 @@ use bevy::{
         extract_resource::ExtractResourcePlugin, renderer::RenderDevice,
     },
 };
-use std::{env::current_dir, time::SystemTime};
+use std::{env::current_dir, fs, path::PathBuf, time::SystemTime};
 
 pub struct MetalCapturePlugin;
 
@@ -23,7 +23,9 @@ impl Plugin for MetalCapturePlugin {
 
 #[derive(Clone, Default, Resource, ExtractResource)]
 pub struct FrameCapture {
-    pub(crate) capture: bool,
+    pub capture: bool,
+    pub output_dir: Option<PathBuf>,
+    pub label: Option<String>,
 }
 
 pub fn input_capture(input: Res<ButtonInput<KeyCode>>, mut capture: ResMut<FrameCapture>) {
@@ -37,29 +39,42 @@ pub fn start_capture(capture: Res<FrameCapture>, device: Res<RenderDevice>) {
 
     println!("Capturing frame");
 
+    let output_dir = capture
+        .output_dir
+        .clone()
+        .unwrap_or_else(|| current_dir().unwrap().join("captures"));
+    let _ = fs::create_dir_all(&output_dir);
+    let label = capture
+        .label
+        .clone()
+        .unwrap_or_else(|| "capture".to_string())
+        .replace(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-' && ch != '_', "_");
+
     let capture = metal::CaptureDescriptor::new();
     capture.set_destination(metal::MTLCaptureDestination::GpuTraceDocument);
-    capture.set_output_url(current_dir().unwrap().join("captures").join(format!(
-            "capture_{}.gputrace",
+    capture.set_output_url(output_dir.join(format!(
+            "{}_{}.gputrace",
+            label,
             SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap()
                 .as_secs()
         )));
-    unsafe {
-        device
-            .wgpu_device()
-            .as_hal::<wgpu_core::api::Metal, _, ()>(|device| {
-                capture.set_capture_device(&device.unwrap().raw_device().lock());
-            })
+    let Some(device) = (unsafe { device.wgpu_device().as_hal::<wgpu_hal::api::Metal>() }) else {
+        println!("Failed to access Metal device for capture");
+        return;
     };
+    let raw_device = device.raw_device().lock();
+    capture.set_capture_device(raw_device.as_ref());
 
-    metal::CaptureManager::shared()
-        .start_capture(&capture)
-        .or_else(|_| {
-            println!("Failed to start capture");
-            Ok::<(), String>(())
-        })
-        .unwrap();
+    let manager = metal::CaptureManager::shared();
+    if !manager.supports_destination(metal::MTLCaptureDestination::GpuTraceDocument) {
+        println!("Metal capture destination GpuTraceDocument is not supported");
+        return;
+    }
+
+    if let Err(err) = manager.start_capture(&capture) {
+        println!("Failed to start capture: {err}");
+    }
 }
 
 pub fn stop_capture(capture: Res<FrameCapture>) {

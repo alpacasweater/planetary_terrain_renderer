@@ -1,4 +1,5 @@
 use crate::{
+    perf::{PHASE_RENDER_PREPARE_GPU_TERRAIN, TerrainPerfTelemetry},
     terrain::TerrainComponents,
     terrain_data::{GpuAttachment, GpuTileAtlas, TileAtlas},
     util::GpuBuffer,
@@ -21,6 +22,7 @@ use bevy::{
     },
 };
 use std::array;
+use std::time::Instant;
 
 // Todo: use this once texture views can be used directly
 #[derive(AsBindGroup)]
@@ -210,7 +212,9 @@ impl GpuTerrain {
         device: Res<RenderDevice>,
         buffers: Res<RenderAssets<GpuShaderStorageBuffer>>,
         mut gpu_terrains: ResMut<TerrainComponents<GpuTerrain>>,
+        perf_telemetry: Res<TerrainPerfTelemetry>,
     ) {
+        let start = Instant::now();
         for gpu_terrain in &mut gpu_terrains.values_mut() {
             let terrain_buffer = buffers.get(&gpu_terrain.terrain_buffer).unwrap();
 
@@ -232,6 +236,7 @@ impl GpuTerrain {
                 )),
             ));
         }
+        perf_telemetry.record_duration(PHASE_RENDER_PREPARE_GPU_TERRAIN, start.elapsed());
     }
 }
 

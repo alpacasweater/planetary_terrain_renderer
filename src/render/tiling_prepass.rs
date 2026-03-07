@@ -1,5 +1,9 @@
 use crate::{
     debug::DebugTerrain,
+    perf::{
+        PHASE_RENDER_NODE_TILING_PREPASS_CPU, PHASE_RENDER_QUEUE_TILING_PREPASS,
+        TerrainPerfTelemetry,
+    },
     render::{
         GpuTerrain, GpuTerrainView,
         terrain_bind_group::TerrainBindGroup,
@@ -10,6 +14,7 @@ use crate::{
     terrain_data::GpuTileAtlas,
     terrain_view::TerrainViewComponents,
 };
+use std::time::Instant;
 use bevy::{
     prelude::*,
     render::{
@@ -227,6 +232,7 @@ impl render_graph::Node for TilingPrepass {
         let pipeline_cache = world.resource::<PipelineCache>();
         let gpu_terrains = world.resource::<TerrainComponents<GpuTerrain>>();
         let gpu_terrain_views = world.resource::<TerrainViewComponents<GpuTerrainView>>();
+        let perf_telemetry = world.resource::<TerrainPerfTelemetry>().clone();
         let debug = world.get_resource::<DebugTerrain>();
 
         if debug.map(|debug| debug.freeze).unwrap_or(false) {
@@ -234,6 +240,7 @@ impl render_graph::Node for TilingPrepass {
         }
 
         context.add_command_buffer_generation_task(move |device| {
+            let start = Instant::now();
             let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor::default());
             let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor::default());
 
@@ -286,6 +293,7 @@ impl render_graph::Node for TilingPrepass {
 
             drop(pass);
 
+            perf_telemetry.record_duration(PHASE_RENDER_NODE_TILING_PREPASS_CPU, start.elapsed());
             encoder.finish()
         });
 
@@ -301,7 +309,9 @@ pub(crate) fn queue_tiling_prepass(
     mut prepass_items: ResMut<TerrainViewComponents<TilingPrepassItem>>,
     gpu_terrain_views: Res<TerrainViewComponents<GpuTerrainView>>,
     gpu_tile_atlases: Res<TerrainComponents<GpuTileAtlas>>,
+    perf_telemetry: Res<TerrainPerfTelemetry>,
 ) {
+    let start = Instant::now();
     for &(terrain, view) in gpu_terrain_views.keys() {
         let gpu_tile_atlas = &gpu_tile_atlases[&terrain];
 
@@ -346,4 +356,5 @@ pub(crate) fn queue_tiling_prepass(
             },
         );
     }
+    perf_telemetry.record_duration(PHASE_RENDER_QUEUE_TILING_PREPASS, start.elapsed());
 }

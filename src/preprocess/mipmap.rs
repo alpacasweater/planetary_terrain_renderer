@@ -1,8 +1,10 @@
 use crate::{
+    perf::{PHASE_RENDER_NODE_MIP_PREPASS_CPU, TerrainPerfTelemetry},
     shaders::MIP_SHADER,
     terrain::TerrainComponents,
     terrain_data::{AttachmentFormat, GpuTileAtlas},
 };
+use std::time::Instant;
 use bevy::{
     asset::{AssetServer, Handle},
     platform::collections::HashMap,
@@ -110,8 +112,10 @@ impl render_graph::Node for MipPrepass {
     ) -> Result<(), NodeRunError> {
         let pipeline_cache = world.resource::<PipelineCache>();
         let gpu_tile_atlases = world.resource::<TerrainComponents<GpuTileAtlas>>();
+        let perf_telemetry = world.resource::<TerrainPerfTelemetry>().clone();
 
         context.add_command_buffer_generation_task(move |device| {
+            let start = Instant::now();
             let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor::default());
 
             let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor::default());
@@ -122,6 +126,7 @@ impl render_graph::Node for MipPrepass {
 
             drop(pass);
 
+            perf_telemetry.record_duration(PHASE_RENDER_NODE_MIP_PREPASS_CPU, start.elapsed());
             encoder.finish()
         });
 

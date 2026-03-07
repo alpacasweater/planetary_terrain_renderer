@@ -1,5 +1,8 @@
 use crate::{
     math::{TerrainShape, TileCoordinate},
+    perf::{
+        PHASE_MAIN_TILE_ATLAS_UPDATE, PHASE_MAIN_UPDATE_TERRAIN_BUFFER, TerrainPerfTelemetry,
+    },
     plugin::TerrainSettings,
     render::TerrainUniform,
     terrain::{CURRENT_GEODETIC_MAPPING_VERSION, TerrainConfig},
@@ -19,6 +22,7 @@ use bevy::{
 };
 use big_space::prelude::CellCoord;
 use std::collections::VecDeque;
+use std::time::Instant;
 
 /// The current state of a tile of a [`TileAtlas`].
 ///
@@ -49,6 +53,7 @@ pub struct TileAtlasPerfCounters {
     pub tile_releases_total: u64,
     pub canceled_pending_attachment_loads_total: u64,
     pub canceled_inflight_attachment_loads_total: u64,
+    pub canceled_stale_upload_attachment_tiles_total: u64,
     pub finished_attachment_loads_total: u64,
     pub upload_enqueued_attachment_tiles_total: u64,
     pub upload_enqueued_bytes_total: u64,
@@ -116,6 +121,10 @@ impl TileAtlas {
         self.perf_counters
     }
 
+    pub fn reset_perf_counters(&mut self) {
+        self.perf_counters = TileAtlasPerfCounters::default();
+    }
+
     pub(crate) fn is_tile_requested(&self, tile_coordinate: TileCoordinate) -> bool {
         self.tile_states
             .get(&tile_coordinate)
@@ -155,6 +164,21 @@ impl TileAtlas {
             .perf_counters
             .peak_upload_backlog_attachment_tiles
             .max(backlog_count);
+    }
+
+    pub(crate) fn note_canceled_stale_upload_attachment_tiles(&mut self, count: usize) {
+        self.perf_counters.canceled_stale_upload_attachment_tiles_total += count as u64;
+    }
+
+    pub(crate) fn is_upload_tile_relevant(
+        &self,
+        coordinate: TileCoordinate,
+        atlas_index: u32,
+    ) -> bool {
+        self.tile_states
+            .get(&coordinate)
+            .map(|tile| tile.requests > 0 && tile.atlas_index == atlas_index)
+            .unwrap_or(false)
     }
 
     /// Creates a new tile_tree from a terrain config.
@@ -245,6 +269,7 @@ impl TileAtlas {
             self.perf_counters.upload_enqueued_attachment_tiles_total += 1;
             self.perf_counters.upload_enqueued_bytes_total += data.bytes().len() as u64;
             self.uploading_tiles.push(AttachmentTileWithData {
+                coordinate: tile.coordinate,
                 atlas_index: tile_state.atlas_index,
                 label: tile.label,
                 data,
@@ -262,7 +287,9 @@ impl TileAtlas {
     pub(crate) fn update(
         mut tile_trees: ResMut<TerrainViewComponents<TileTree>>,
         mut tile_atlases: Query<&mut TileAtlas>,
+        perf_telemetry: Res<TerrainPerfTelemetry>,
     ) {
+        let start = Instant::now();
         for (&(terrain, _view), tile_tree) in tile_trees.iter_mut() {
             let mut tile_atlas = tile_atlases.get_mut(terrain).unwrap();
 
@@ -274,16 +301,20 @@ impl TileAtlas {
                 tile_atlas.request_tile(tile_coordinate);
             }
         }
+        perf_telemetry.record_duration(PHASE_MAIN_TILE_ATLAS_UPDATE, start.elapsed());
     }
 
     pub fn update_terrain_buffer(
         mut tile_atlases: Query<(&mut TileAtlas, &GlobalTransform)>,
         mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
+        perf_telemetry: Res<TerrainPerfTelemetry>,
     ) {
+        let start = Instant::now();
         for (tile_atlas, global_transform) in &mut tile_atlases {
             let terrain_buffer = buffers.get_mut(&tile_atlas.terrain_buffer).unwrap();
             terrain_buffer.set_data(TerrainUniform::new(&tile_atlas, global_transform));
         }
+        perf_telemetry.record_duration(PHASE_MAIN_UPDATE_TERRAIN_BUFFER, start.elapsed());
     }
 
     fn request_tile(&mut self, tile_coordinate: TileCoordinate) {

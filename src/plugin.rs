@@ -1,5 +1,6 @@
 use crate::{
     formats::TiffLoader,
+    perf::TerrainPerfTelemetry,
     preprocess::{MipPipelines, MipPrepass},
     render::{
         DepthCopyPipeline, GpuTerrain, GpuTerrainView, TerrainItem, TerrainPass,
@@ -39,7 +40,7 @@ impl Default for TerrainSettings {
         Self {
             attachments: vec![AttachmentLabel::Height],
             atlas_size: 1028,
-            upload_budget_bytes_per_frame: 16 * 1024 * 1024,
+            upload_budget_bytes_per_frame: 24 * 1024 * 1024,
         }
     }
 }
@@ -56,7 +57,7 @@ impl TerrainSettings {
         Self {
             attachments,
             atlas_size: 1028,
-            upload_budget_bytes_per_frame: 16 * 1024 * 1024,
+            upload_budget_bytes_per_frame: 24 * 1024 * 1024,
         }
     }
 
@@ -71,6 +72,8 @@ pub struct TerrainPlugin;
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
+        let perf_telemetry = TerrainPerfTelemetry::default();
+        app.insert_resource(perf_telemetry.clone());
         app.add_plugins(BigSpaceDefaultPlugins);
 
         app.add_plugins(RonAssetPlugin::<TerrainConfig>::new(&["tc.ron"]))
@@ -99,6 +102,7 @@ impl Plugin for TerrainPlugin {
                 ),
             );
         app.sub_app_mut(RenderApp)
+            .insert_resource(perf_telemetry)
             .init_resource::<SpecializedComputePipelines<MipPipelines>>()
             .init_resource::<SpecializedComputePipelines<TerrainTilingPrepassPipelines>>()
             .init_resource::<TerrainComponents<GpuTileAtlas>>()

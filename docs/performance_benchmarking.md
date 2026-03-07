@@ -2,6 +2,12 @@
 
 This project includes an automated benchmark mode in `examples/spherical_multires.rs` and a runner script.
 
+The benchmark contract is:
+- benchmark scenarios must be named and recorded in artifacts
+- drone rendering is off by default in benchmark mode
+- capture-enabled runs must emit the expected PNG files or fail
+- phase timing telemetry and perf counters are reset at measurement start, so benchmark artifacts describe the measurement window rather than startup or warmup
+
 ## Quick Run
 
 ```bash
@@ -16,17 +22,29 @@ Per trial, the example writes:
 - `trial_N.csv`: one-row CSV summary
 
 Metrics include:
+- `scenario_name`
+- `overlays`
+- `present_mode`
 - `benchmark_mode`
 - `debug_tools_enabled`
 - `perf_title_enabled`
 - `fps_mean`
 - `frame_ms_mean`
 - `frame_ms_p50/p90/p95/p99`
+- `frame_over_25ms_count`
+- `frame_over_33ms_count`
+- `frame_over_50ms_count`
 - `latency_estimate_ms` (currently `p95`)
+- `peak_rss_kib`
 - `ready_wait_s`
 - `ready_atlas_count`
 - `ready_loaded_atlas_count`
 - `ready_loaded_tile_total`
+- `hottest_phase_name`
+- `hottest_phase_mean_ms`
+- `hottest_phase_p95_ms`
+- `hottest_phase_max_ms`
+- `phase_timings` (JSON only; per-phase mean, p95, p99, max, sample_count)
 - `upload_budget_bytes_per_frame`
 - `terrain_view_buffer_updates_total`
 - `tile_tree_buffer_updates_total`
@@ -63,7 +81,14 @@ After all trials, the script writes:
 - `CAPTURE_FRAMES=120,360,720`
 - `ENABLE_DEBUG_TOOLS=0`
 - `ENABLE_PERF_TITLE=0`
-- `UPLOAD_BUDGET_MB=16`
+- `ENABLE_DRONE=0`
+- `UPLOAD_BUDGET_MB=24`
+- `EXAMPLE_FEATURES` unset by default
+- `METAL_CAPTURE_ENABLED=0`
+- `METAL_CAPTURE_FRAME` unset by default
+- `METAL_CAPTURE_DIR` unset by default
+- `BENCHMARK_SWEEP_DEG=8`
+- `BENCHMARK_SWEEP_PERIOD_SECONDS=40`
 
 ## Useful Overrides
 
@@ -82,6 +107,27 @@ CAPTURE_FRAMES=240,480 \
 ./scripts/benchmark_spherical_multires.sh
 ```
 
+Named scenario:
+
+```bash
+SCENARIO_NAME=swiss_fast_sweep \
+OVERLAYS=swiss \
+PRESENT_MODE=auto_novsync \
+./scripts/benchmark_spherical_multires.sh
+```
+
+## Recommended Scenario Matrix
+
+Use at least these three scenarios when evaluating optimization changes:
+- `swiss_fast_sweep`: moving heavy-overlay latency scenario
+- `swiss_close_smoke`: close-up heavy-overlay visual-validation scenario
+- `base_only_fast`: base-earth control scenario
+
+Reason:
+- the moving sweep is the main latency benchmark
+- the close-up smoke run is better for validating that the overlay and any demo entities are actually visible
+- the base-only control helps separate overlay costs from general renderer costs
+
 Single-run capture for visual validation:
 
 ```bash
@@ -93,6 +139,31 @@ CAPTURE_DIR=/tmp/terrain_bench_smoke_captures \
 CAPTURE_FRAMES=60 \
 ./scripts/benchmark_spherical_multires.sh
 ```
+
+Metal GPU trace capture:
+
+```bash
+OUT_DIR=/tmp/terrain_bench_gpu_trace \
+TRIALS=1 \
+WARMUP_SECONDS=2 \
+DURATION_SECONDS=5 \
+EXAMPLE_FEATURES=metal_capture \
+METAL_CAPTURE_ENABLED=1 \
+METAL_CAPTURE_FRAME=120 \
+METAL_CAPTURE_DIR=/tmp/terrain_bench_gpu_trace_gputrace \
+CAPTURE_DIR=/tmp/terrain_bench_gpu_trace_captures \
+CAPTURE_FRAMES=90 \
+./scripts/benchmark_spherical_multires.sh
+```
+
+This writes:
+- benchmark JSON/CSV under `OUT_DIR`
+- a `.gputrace` directory under `METAL_CAPTURE_DIR`
+- optional PNG captures under `CAPTURE_DIR`
+
+Important:
+- `METAL_CAPTURE_ENABLED=1` is required for document capture outside Xcode
+- do not schedule `CAPTURE_FRAMES` on the same frame as `METAL_CAPTURE_FRAME`; the runner will reject that configuration
 
 ## Direct Example Benchmark Mode
 
@@ -116,9 +187,12 @@ This writes:
 
 - `auto_novsync` is preferred for throughput benchmarking.
 - Benchmarking waits until terrain atlases report loaded tiles before warmup and measurement.
+- Phase timing telemetry and tile request or upload counters are reset when measurement begins.
 - The script sets `BEVY_ASSET_ROOT` so release-binary launches resolve project `assets/` reliably.
 - The runner disables debug/picking and title-update overhead unless re-enabled with `ENABLE_DEBUG_TOOLS=1` or `ENABLE_PERF_TITLE=1`.
 - Upload pressure is limited by `UPLOAD_BUDGET_MB` in the runner and `MULTIRES_UPLOAD_BUDGET_MB` in the example. Set it to `0` to benchmark without throttling.
+- Current CPU-side phase attribution shows the Swiss sweep is dominated by `render.prepare.gpu_tile_atlas`, and within that phase by texture uploads rather than mip bind-group setup.
 - The example supports PNG capture envs directly: `MULTIRES_CAPTURE_DIR` and `MULTIRES_CAPTURE_FRAMES`.
+- The example also supports one-shot Metal capture envs when built with `--features metal_capture`: `MULTIRES_METAL_CAPTURE_FRAME` and `MULTIRES_METAL_CAPTURE_DIR`.
 - Use fixed overlay and camera settings when comparing runs.
 - GPU-backed runs are required for meaningful captures and timings; sandboxed runs on this machine do not expose a GPU.

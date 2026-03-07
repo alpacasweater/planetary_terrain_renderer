@@ -22,7 +22,7 @@ pub use self::{camera::DebugCameraController, orbital_camera::OrbitalCameraContr
 #[cfg(feature = "metal_capture")]
 mod metal_capture;
 #[cfg(feature = "metal_capture")]
-pub use self::metal_capture::MetalCapturePlugin;
+pub use self::metal_capture::{FrameCapture, MetalCapturePlugin};
 
 #[derive(Asset, AsBindGroup, TypePath, Clone, Default)]
 pub struct DebugTerrainMaterial {}

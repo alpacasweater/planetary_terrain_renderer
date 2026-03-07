@@ -1,4 +1,5 @@
 use crate::{
+    math::TileCoordinate,
     plugin::TerrainSettings,
     preprocess::MipPipelines,
     terrain_data::{AttachmentFormat, AttachmentLabel, TileAtlas, attachment::Attachment},
@@ -39,6 +40,7 @@ pub(crate) fn create_attachment_layout(device: &RenderDevice) -> BindGroupLayout
 
 #[derive(Clone, Debug, Default)]
 pub struct AtlasTileAttachment {
+    pub(crate) coordinate: TileCoordinate,
     pub(crate) atlas_index: u32,
     pub(crate) label: AttachmentLabel,
 }

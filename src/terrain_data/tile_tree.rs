@@ -1,5 +1,6 @@
 use crate::{
     math::{Coordinate, TerrainShape, TileCoordinate},
+    perf::{PHASE_MAIN_UPDATE_TERRAIN_VIEW_BUFFER, TerrainPerfTelemetry},
     render::{TerrainViewUniform, TileTreeUniform},
     terrain::TerrainConfig,
     terrain_data::{INVALID_ATLAS_INDEX, INVALID_LOD, TileAtlas},
@@ -21,6 +22,7 @@ use big_space::prelude::*;
 use itertools::iproduct;
 use ndarray::Array4;
 use std::{cmp::Ordering, iter};
+use std::time::Instant;
 
 /// The current state of a tile of a [`TileTree`].
 ///
@@ -231,6 +233,10 @@ impl TileTree {
         self.perf_counters
     }
 
+    pub fn reset_perf_counters(&mut self) {
+        self.perf_counters = TileTreePerfCounters::default();
+    }
+
     fn compute_tree_xy(coordinate: Coordinate, tile_count: f64) -> DVec2 {
         // scale and clamp the coordinate to the tile tree bounds
         (coordinate.uv * tile_count).min(DVec2::splat(tile_count - 0.000001))
@@ -405,7 +411,9 @@ impl TileTree {
     pub fn update_terrain_view_buffer(
         mut tile_trees: ResMut<TerrainViewComponents<TileTree>>,
         mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
+        perf_telemetry: Res<TerrainPerfTelemetry>,
     ) {
+        let start = Instant::now();
         for tile_tree in tile_trees.values_mut() {
             let terrain_view_buffer = buffers.get_mut(&tile_tree.terrain_view_buffer).unwrap();
             terrain_view_buffer.set_data(TerrainViewUniform::from(&*tile_tree));
@@ -422,6 +430,7 @@ impl TileTree {
                 tile_tree.perf_counters.tile_tree_buffer_skipped_total += 1;
             }
         }
+        perf_telemetry.record_duration(PHASE_MAIN_UPDATE_TERRAIN_VIEW_BUFFER, start.elapsed());
     }
 
     pub fn approximate_height_readback(

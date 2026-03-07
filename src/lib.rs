@@ -46,6 +46,7 @@
 pub mod debug;
 pub mod formats;
 pub mod math;
+pub mod perf;
 pub mod picking;
 pub mod plugin;
 pub mod preprocess;

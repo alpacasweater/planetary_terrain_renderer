@@ -1,4 +1,7 @@
-use crate::shaders::DEPTH_COPY_SHADER;
+use crate::{
+    perf::{PHASE_RENDER_NODE_TERRAIN_PASS_CPU, PHASE_RENDER_PREPARE_DEPTH_TEXTURES, TerrainPerfTelemetry},
+    shaders::DEPTH_COPY_SHADER,
+};
 use bevy::{
     core_pipeline::{FullscreenShader, core_3d::CORE_3D_DEPTH_FORMAT},
     ecs::query::QueryItem,
@@ -19,6 +22,7 @@ use bevy::{
     },
 };
 use std::ops::Range;
+use std::time::Instant;
 
 pub(crate) const TERRAIN_DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32FloatStencil8;
 
@@ -154,7 +158,9 @@ pub fn prepare_terrain_depth_textures(
     mut texture_cache: ResMut<TextureCache>,
     device: Res<RenderDevice>,
     views_3d: Query<(Entity, &ExtractedCamera, &Msaa)>,
+    perf_telemetry: Res<TerrainPerfTelemetry>,
 ) {
+    let start = Instant::now();
     for (view, camera, msaa) in &views_3d {
         let Some(physical_target_size) = camera.physical_target_size else {
             continue;
@@ -181,6 +187,7 @@ pub fn prepare_terrain_depth_textures(
             .entity(view)
             .insert(TerrainViewDepthTexture::new(cached_texture));
     }
+    perf_telemetry.record_duration(PHASE_RENDER_PREPARE_DEPTH_TEXTURES, start.elapsed());
 }
 
 #[derive(Resource)]
@@ -260,6 +267,7 @@ impl ViewNode for TerrainPass {
         let device = world.resource::<RenderDevice>();
         let pipeline_cache = world.resource::<PipelineCache>();
         let depth_copy_pipeline = world.resource::<DepthCopyPipeline>();
+        let perf_telemetry = world.resource::<TerrainPerfTelemetry>().clone();
 
         let Some(pipeline) = pipeline_cache.get_render_pipeline(depth_copy_pipeline.id) else {
             return Ok(());
@@ -299,6 +307,7 @@ impl ViewNode for TerrainPass {
         let depth_stencil_attachment = Some(depth.get_attachment(StoreOp::Store));
 
         context.add_command_buffer_generation_task(move |device| {
+            let start = Instant::now();
             let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor::default());
 
             let pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -325,6 +334,7 @@ impl ViewNode for TerrainPass {
             pass.draw(0..3, 0..1);
             drop(pass);
 
+            perf_telemetry.record_duration(PHASE_RENDER_NODE_TERRAIN_PASS_CPU, start.elapsed());
             encoder.finish()
         });
 

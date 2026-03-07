@@ -1,4 +1,10 @@
 use crate::{
+    perf::{
+        PHASE_RENDER_EXTRACT_GPU_TILE_ATLAS, PHASE_RENDER_PREPARE_GPU_TILE_ATLAS,
+        PHASE_RENDER_PREPARE_GPU_TILE_ATLAS_MIP_BIND_GROUPS,
+        PHASE_RENDER_PREPARE_GPU_TILE_ATLAS_UPLOADS, PHASE_RENDER_QUEUE_GPU_TILE_ATLAS,
+        TerrainPerfTelemetry,
+    },
     plugin::TerrainSettings,
     preprocess::{MipPipelineKey, MipPipelines},
     terrain::TerrainComponents,
@@ -17,6 +23,7 @@ use bevy::{
     tasks::{AsyncComputeTaskPool, Task},
 };
 use std::{iter, mem};
+use std::time::Instant;
 
 /// Stores the GPU representation of the [`TileAtlas`] (array textures)
 /// alongside the data to update it.
@@ -99,6 +106,8 @@ impl GpuTileAtlas {
         mut main_world: ResMut<MainWorld>,
         mut gpu_tile_atlases: ResMut<TerrainComponents<GpuTileAtlas>>,
     ) {
+        let perf_telemetry = main_world.resource::<TerrainPerfTelemetry>().clone();
+        let start = Instant::now();
         let budget_bytes = main_world
             .resource::<TerrainSettings>()
             .upload_budget_bytes_per_frame;
@@ -109,8 +118,13 @@ impl GpuTileAtlas {
             let mut upload_tiles = Vec::new();
             let mut deferred_tiles = Vec::new();
             let mut queued_bytes = 0usize;
+            let mut stale_upload_count = 0usize;
 
             for tile in mem::take(&mut tile_atlas.uploading_tiles) {
+                if !tile_atlas.is_upload_tile_relevant(tile.coordinate, tile.atlas_index) {
+                    stale_upload_count += 1;
+                    continue;
+                }
                 let tile_bytes = tile.data.bytes().len();
                 let fits_budget = budget_bytes == 0
                     || upload_tiles.is_empty()
@@ -124,6 +138,7 @@ impl GpuTileAtlas {
                 }
             }
 
+            tile_atlas.note_canceled_stale_upload_attachment_tiles(stale_upload_count);
             let deferred_count = deferred_tiles.len();
             tile_atlas.uploading_tiles = deferred_tiles;
             let backlog_count = tile_atlas.uploading_tiles.len();
@@ -156,6 +171,7 @@ impl GpuTileAtlas {
                 .downloading_tiles
                 .extend(mem::take(&mut gpu_tile_atlas.download_tiles));
         }
+        perf_telemetry.record_duration(PHASE_RENDER_EXTRACT_GPU_TILE_ATLAS, start.elapsed());
     }
 
     /// Queues the attachments of the tiles that have finished loading to be copied into the
@@ -165,14 +181,31 @@ impl GpuTileAtlas {
         queue: Res<RenderQueue>,
         mip_pipelines: Res<MipPipelines>,
         mut gpu_tile_atlases: ResMut<TerrainComponents<GpuTileAtlas>>,
+        perf_telemetry: Res<TerrainPerfTelemetry>,
     ) {
+        let start = Instant::now();
+        let mut mip_bind_group_elapsed = std::time::Duration::ZERO;
+        let mut upload_elapsed = std::time::Duration::ZERO;
         for gpu_tile_atlas in gpu_tile_atlases.values_mut() {
+            let mip_start = Instant::now();
             for attachment in gpu_tile_atlas.attachments.values_mut() {
                 attachment.prepare_mip_bind_groups(&device, &mip_pipelines);
             }
+            mip_bind_group_elapsed += mip_start.elapsed();
 
+            let upload_start = Instant::now();
             gpu_tile_atlas.upload_tiles(&queue);
+            upload_elapsed += upload_start.elapsed();
         }
+        perf_telemetry.record_duration(PHASE_RENDER_PREPARE_GPU_TILE_ATLAS, start.elapsed());
+        perf_telemetry.record_duration(
+            PHASE_RENDER_PREPARE_GPU_TILE_ATLAS_MIP_BIND_GROUPS,
+            mip_bind_group_elapsed,
+        );
+        perf_telemetry.record_duration(
+            PHASE_RENDER_PREPARE_GPU_TILE_ATLAS_UPLOADS,
+            upload_elapsed,
+        );
     }
 
     pub(crate) fn queue(
@@ -180,7 +213,9 @@ impl GpuTileAtlas {
         mip_pipelines: ResMut<MipPipelines>,
         mut pipelines: ResMut<SpecializedComputePipelines<MipPipelines>>,
         mut gpu_tile_atlases: ResMut<TerrainComponents<GpuTileAtlas>>,
+        perf_telemetry: Res<TerrainPerfTelemetry>,
     ) {
+        let start = Instant::now();
         for gpu_tile_atlas in gpu_tile_atlases.values_mut() {
             for attachment in gpu_tile_atlas.attachments.values_mut() {
                 attachment.mip_pipeline = pipelines.specialize(
@@ -192,6 +227,7 @@ impl GpuTileAtlas {
                 );
             }
         }
+        perf_telemetry.record_duration(PHASE_RENDER_QUEUE_GPU_TILE_ATLAS, start.elapsed());
     }
 
     pub(crate) fn _cleanup(mut gpu_tile_atlases: ResMut<TerrainComponents<GpuTileAtlas>>) {
@@ -266,6 +302,7 @@ impl GpuTileAtlas {
                             }
 
                             AttachmentTileWithData {
+                                coordinate: tile.coordinate,
                                 atlas_index: tile.atlas_index,
                                 label: tile.label,
                                 data: AttachmentData::from_bytes(&data, buffer_info.format),
