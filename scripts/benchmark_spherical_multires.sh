@@ -24,6 +24,7 @@ ENABLE_DEBUG_TOOLS="${ENABLE_DEBUG_TOOLS:-0}"
 ENABLE_PERF_TITLE="${ENABLE_PERF_TITLE:-0}"
 ENABLE_DRONE="${ENABLE_DRONE:-0}"
 UPLOAD_BUDGET_MB="${UPLOAD_BUDGET_MB:-24}"
+MSAA_SAMPLES="${MSAA_SAMPLES:-4}"
 METAL_CAPTURE_ENABLED="${METAL_CAPTURE_ENABLED:-0}"
 METAL_CAPTURE_FRAME="${METAL_CAPTURE_FRAME:-}"
 METAL_CAPTURE_DIR="${METAL_CAPTURE_DIR:-}"
@@ -79,6 +80,7 @@ for trial in $(seq 1 "$TRIALS"); do
   MULTIRES_ENABLE_PERF_TITLE="$ENABLE_PERF_TITLE" \
   MULTIRES_ENABLE_DRONE="$ENABLE_DRONE" \
   MULTIRES_UPLOAD_BUDGET_MB="$UPLOAD_BUDGET_MB" \
+  MULTIRES_MSAA_SAMPLES="$MSAA_SAMPLES" \
   METAL_CAPTURE_ENABLED="$METAL_CAPTURE_ENABLED" \
   MULTIRES_METAL_CAPTURE_FRAME="$METAL_CAPTURE_FRAME" \
   MULTIRES_METAL_CAPTURE_DIR="$METAL_CAPTURE_DIR" \
@@ -123,10 +125,10 @@ summary_txt="$OUT_DIR/summary.txt"
 
 echo "== Aggregating results =="
 {
-  echo "trial,scenario_name,overlays,present_mode,drone_enabled,debug_tools_enabled,perf_title_enabled,ready_wait_s,ready_atlas_count,ready_loaded_atlas_count,ready_loaded_tile_total,fps_mean,frame_ms_mean,frame_ms_p95,frame_ms_p99,frame_ms_max,frame_over_25ms_count,frame_over_33ms_count,frame_over_50ms_count,latency_estimate_ms,peak_rss_kib,sample_count"
+  echo "trial,scenario_name,overlays,present_mode,drone_enabled,debug_tools_enabled,perf_title_enabled,ready_wait_s,ready_atlas_count,ready_loaded_atlas_count,ready_loaded_tile_total,fps_mean,frame_ms_mean,frame_ms_p95,frame_ms_p99,frame_ms_max,frame_over_25ms_count,frame_over_33ms_count,frame_over_50ms_count,latency_estimate_ms,peak_rss_kib,msaa_samples,sample_count"
   for csv in "$OUT_DIR"/trial_*.csv; do
     trial_name="$(basename "$csv" .csv)"
-    awk -F, -v trial="$trial_name" 'NR==2 {printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n", trial, $1, $2, $3, $32, $8, $9, $13, $14, $15, $16, $17, $18, $22, $23, $24, $25, $26, $27, $28, $29, $12}' "$csv"
+    awk -F, -v trial="$trial_name" 'NR==2 {printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n", trial, $1, $2, $3, $33, $8, $9, $13, $14, $15, $16, $17, $18, $22, $23, $24, $25, $26, $27, $28, $29, $30, $12}' "$csv"
   done
 } > "$summary_csv"
 

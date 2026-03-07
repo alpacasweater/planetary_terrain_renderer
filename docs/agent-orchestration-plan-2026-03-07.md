@@ -90,7 +90,9 @@ Current first target:
 - `render.prepare.gpu_tile_atlas.uploads` is the hottest measured CPU phase in the Swiss sweep
 - higher default upload budget (`24 MB/frame`) is the first validated tuning change
 - upload-priority reordering was tested and rejected on the Swiss heavy-overlay baseline
-- next work should pivot to GPU trace attribution using the new Metal capture path, then return to upload or staging changes only if the trace points back there
+- Metal capture plus short isolation runs showed MSAA is a first-order latency lever in the Swiss heavy-overlay scene
+- the terrain depth-copy path has been fixed to support both single-sample and multisampled views
+- next work should treat `MSAA_SAMPLES=1` as the low-latency benchmark configuration, keep `MSAA_SAMPLES=4` as the quality-control comparison, and then return to upload or staging changes only if the lower-MSAA baseline still points there
 
 ### O3: Render-Path Churn Reduction
 Skill: `terrain-render-path-optimizer`

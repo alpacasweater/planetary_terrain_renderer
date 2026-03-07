@@ -60,6 +60,7 @@ Metrics include:
 - `peak_pending_attachment_queue`
 - `peak_inflight_attachment_loads`
 - `peak_upload_backlog_attachment_tiles`
+- `msaa_samples`
 - `sample_count`
 
 After all trials, the script writes:
@@ -83,6 +84,7 @@ After all trials, the script writes:
 - `ENABLE_PERF_TITLE=0`
 - `ENABLE_DRONE=0`
 - `UPLOAD_BUDGET_MB=24`
+- `MSAA_SAMPLES=4`
 - `EXAMPLE_FEATURES` unset by default
 - `METAL_CAPTURE_ENABLED=0`
 - `METAL_CAPTURE_FRAME` unset by default
@@ -98,6 +100,12 @@ TRIALS=5 OVERLAYS=saxony WARMUP_SECONDS=10 DURATION_SECONDS=30 ./scripts/benchma
 
 ```bash
 OUT_DIR=/tmp/terrain_bench PRESENT_MODE=auto_vsync ./scripts/benchmark_spherical_multires.sh
+```
+
+```bash
+OUT_DIR=/tmp/terrain_bench_msaa1 \
+MSAA_SAMPLES=1 \
+./scripts/benchmark_spherical_multires.sh
 ```
 
 ```bash
@@ -191,7 +199,9 @@ This writes:
 - The script sets `BEVY_ASSET_ROOT` so release-binary launches resolve project `assets/` reliably.
 - The runner disables debug/picking and title-update overhead unless re-enabled with `ENABLE_DEBUG_TOOLS=1` or `ENABLE_PERF_TITLE=1`.
 - Upload pressure is limited by `UPLOAD_BUDGET_MB` in the runner and `MULTIRES_UPLOAD_BUDGET_MB` in the example. Set it to `0` to benchmark without throttling.
+- MSAA is controlled by `MSAA_SAMPLES` in the runner and `MULTIRES_MSAA_SAMPLES` in the example.
 - Current CPU-side phase attribution shows the Swiss sweep is dominated by `render.prepare.gpu_tile_atlas`, and within that phase by texture uploads rather than mip bind-group setup.
+- Short Swiss isolation runs on this machine showed `MSAA_SAMPLES=1` materially outperforms `MSAA_SAMPLES=4`, so MSAA should be treated as a first-class benchmark dimension rather than an implicit default.
 - The example supports PNG capture envs directly: `MULTIRES_CAPTURE_DIR` and `MULTIRES_CAPTURE_FRAMES`.
 - The example also supports one-shot Metal capture envs when built with `--features metal_capture`: `MULTIRES_METAL_CAPTURE_FRAME` and `MULTIRES_METAL_CAPTURE_DIR`.
 - Use fixed overlay and camera settings when comparing runs.

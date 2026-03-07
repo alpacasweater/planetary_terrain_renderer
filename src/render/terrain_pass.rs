@@ -1,6 +1,6 @@
 use crate::{
     perf::{PHASE_RENDER_NODE_TERRAIN_PASS_CPU, PHASE_RENDER_PREPARE_DEPTH_TEXTURES, TerrainPerfTelemetry},
-    shaders::DEPTH_COPY_SHADER,
+    shaders::{DEPTH_COPY_SHADER, DEPTH_COPY_SINGLE_SHADER},
 };
 use bevy::{
     core_pipeline::{FullscreenShader, core_3d::CORE_3D_DEPTH_FORMAT},
@@ -14,7 +14,7 @@ use bevy::{
             CachedRenderPipelinePhaseItem, DrawFunctionId, PhaseItem, PhaseItemExtraIndex,
             SortedPhaseItem, TrackedRenderPass, ViewSortedRenderPhases,
         },
-        render_resource::{binding_types::texture_depth_2d_multisampled, *},
+        render_resource::{binding_types::{texture_depth_2d, texture_depth_2d_multisampled}, *},
         renderer::{RenderContext, RenderDevice},
         sync_world::MainEntity,
         texture::{CachedTexture, TextureCache},
@@ -192,8 +192,22 @@ pub fn prepare_terrain_depth_textures(
 
 #[derive(Resource)]
 pub struct DepthCopyPipeline {
-    layout: BindGroupLayout,
-    id: CachedRenderPipelineId,
+    single_sample_layout: BindGroupLayout,
+    multisampled_layout: BindGroupLayout,
+    single_sample_id: CachedRenderPipelineId,
+    sample2_id: CachedRenderPipelineId,
+    sample4_id: CachedRenderPipelineId,
+}
+
+impl DepthCopyPipeline {
+    fn pipeline_and_layout(&self, sample_count: u32) -> (CachedRenderPipelineId, &BindGroupLayout) {
+        match sample_count {
+            1 => (self.single_sample_id, &self.single_sample_layout),
+            2 => (self.sample2_id, &self.multisampled_layout),
+            4 => (self.sample4_id, &self.multisampled_layout),
+            _ => panic!("Unsupported depth copy sample count: {sample_count}"),
+        }
+    }
 }
 
 impl FromWorld for DepthCopyPipeline {
@@ -201,42 +215,79 @@ impl FromWorld for DepthCopyPipeline {
         let pipeline_cache = world.resource::<PipelineCache>();
         let fullscreen_shader = world.resource::<FullscreenShader>();
 
-        let layout_descriptor = BindGroupLayoutDescriptor::new(
-            "depth_copy_pipeline_layout",
+        let single_sample_layout_descriptor = BindGroupLayoutDescriptor::new(
+            "depth_copy_single_pipeline_layout",
+            &BindGroupLayoutEntries::sequential(ShaderStages::FRAGMENT, (texture_depth_2d(),)),
+        );
+        let single_sample_layout =
+            pipeline_cache.get_bind_group_layout(&single_sample_layout_descriptor);
+
+        let multisampled_layout_descriptor = BindGroupLayoutDescriptor::new(
+            "depth_copy_multisampled_pipeline_layout",
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::FRAGMENT,
                 (texture_depth_2d_multisampled(),),
             ),
         );
-        let layout = pipeline_cache.get_bind_group_layout(&layout_descriptor);
+        let multisampled_layout =
+            pipeline_cache.get_bind_group_layout(&multisampled_layout_descriptor);
 
-        let id = pipeline_cache.queue_render_pipeline(RenderPipelineDescriptor {
-            label: None,
-            layout: vec![layout_descriptor],
-            push_constant_ranges: Vec::new(),
-            vertex: fullscreen_shader.to_vertex_state(),
-            fragment: Some(FragmentState {
-                shader: world.load_asset(DEPTH_COPY_SHADER),
-                shader_defs: vec![],
-                entry_point: Some("fragment".into()),
-                targets: vec![],
-            }),
-            primitive: Default::default(),
-            depth_stencil: Some(DepthStencilState {
-                format: CORE_3D_DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: CompareFunction::Always,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: MultisampleState {
-                count: 4, // Todo: specialize per camera ...
-                ..Default::default()
-            },
-            zero_initialize_workgroup_memory: false,
-        });
+        let queue_pipeline = |label: &'static str,
+                              shader: Handle<Shader>,
+                              layout: BindGroupLayoutDescriptor,
+                              sample_count: u32| {
+            pipeline_cache.queue_render_pipeline(RenderPipelineDescriptor {
+                label: Some(label.into()),
+                layout: vec![layout],
+                push_constant_ranges: Vec::new(),
+                vertex: fullscreen_shader.to_vertex_state(),
+                fragment: Some(FragmentState {
+                    shader,
+                    shader_defs: vec![],
+                    entry_point: Some("fragment".into()),
+                    targets: vec![],
+                }),
+                primitive: Default::default(),
+                depth_stencil: Some(DepthStencilState {
+                    format: CORE_3D_DEPTH_FORMAT,
+                    depth_write_enabled: true,
+                    depth_compare: CompareFunction::Always,
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: MultisampleState {
+                    count: sample_count,
+                    ..Default::default()
+                },
+                zero_initialize_workgroup_memory: false,
+            })
+        };
 
-        Self { layout, id }
+        let single_sample_id = queue_pipeline(
+            "depth_copy_single_pipeline",
+            world.load_asset(DEPTH_COPY_SINGLE_SHADER),
+            single_sample_layout_descriptor,
+            1,
+        );
+        let sample2_id = queue_pipeline(
+            "depth_copy_msaa2_pipeline",
+            world.load_asset(DEPTH_COPY_SHADER),
+            multisampled_layout_descriptor.clone(),
+            2,
+        );
+        let sample4_id = queue_pipeline(
+            "depth_copy_msaa4_pipeline",
+            world.load_asset(DEPTH_COPY_SHADER),
+            multisampled_layout_descriptor.clone(),
+            4,
+        );
+        Self {
+            single_sample_layout,
+            multisampled_layout,
+            single_sample_id,
+            sample2_id,
+            sample4_id,
+        }
     }
 }
 
@@ -248,6 +299,7 @@ impl ViewNode for TerrainPass {
         Entity,
         MainEntity,
         &'static ExtractedCamera,
+        &'static Msaa,
         &'static ViewTarget,
         &'static ViewDepthTexture,
         &'static TerrainViewDepthTexture,
@@ -257,7 +309,7 @@ impl ViewNode for TerrainPass {
         &self,
         _graph: &mut RenderGraphContext,
         context: &mut RenderContext<'w>,
-        (render_view, main_view, camera, target, depth, terrain_depth): QueryItem<
+        (render_view, main_view, camera, msaa, target, depth, terrain_depth): QueryItem<
             'w,
             '_,
             Self::ViewQuery,
@@ -269,7 +321,9 @@ impl ViewNode for TerrainPass {
         let depth_copy_pipeline = world.resource::<DepthCopyPipeline>();
         let perf_telemetry = world.resource::<TerrainPerfTelemetry>().clone();
 
-        let Some(pipeline) = pipeline_cache.get_render_pipeline(depth_copy_pipeline.id) else {
+        let (depth_copy_pipeline_id, depth_copy_layout) =
+            depth_copy_pipeline.pipeline_and_layout(msaa.samples());
+        let Some(pipeline) = pipeline_cache.get_render_pipeline(depth_copy_pipeline_id) else {
             return Ok(());
         };
 
@@ -297,7 +351,7 @@ impl ViewNode for TerrainPass {
         });
         let depth_copy_bind_group = device.create_bind_group(
             None,
-            &depth_copy_pipeline.layout,
+            depth_copy_layout,
             &BindGroupEntries::single(&terrain_depth_view),
         );
 

@@ -14,6 +14,8 @@ pub const REFINE_TILES_SHADER: &str =
 //     "embedded://bevy_terrain/shaders/preprocess/downsample.wgsl";
 pub(crate) const PICKING_SHADER: &str = "embedded://bevy_terrain/shaders/picking.wgsl";
 pub(crate) const DEPTH_COPY_SHADER: &str = "embedded://bevy_terrain/shaders/depth_copy.wgsl";
+pub(crate) const DEPTH_COPY_SINGLE_SHADER: &str =
+    "embedded://bevy_terrain/shaders/depth_copy_single.wgsl";
 pub(crate) const MIP_SHADER: &str = "embedded://bevy_terrain/shaders/mipmap.wgsl";
 
 #[derive(Default, Resource)]
@@ -66,6 +68,7 @@ pub(crate) fn load_terrain_shaders(app: &mut App, attachments: &[AttachmentLabel
     embedded_asset!(app, "tiling_prepass/refine_tiles.wgsl");
     embedded_asset!(app, "picking.wgsl");
     embedded_asset!(app, "depth_copy.wgsl");
+    embedded_asset!(app, "depth_copy_single.wgsl");
     embedded_asset!(app, "mipmap.wgsl");
 
     load_bindings_shader(app, attachments);

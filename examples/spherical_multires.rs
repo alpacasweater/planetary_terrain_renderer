@@ -2,6 +2,7 @@ use bevy::app::AppExit;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 #[cfg(feature = "metal_capture")]
 use bevy::diagnostic::FrameCount;
+use bevy::render::view::Msaa;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::shader::ShaderRef;
 use bevy::time::Real;
@@ -45,6 +46,7 @@ const METAL_CAPTURE_DIR_ENV: &str = "MULTIRES_METAL_CAPTURE_DIR";
 const ENABLE_DEBUG_TOOLS_ENV: &str = "MULTIRES_ENABLE_DEBUG_TOOLS";
 const ENABLE_PERF_TITLE_ENV: &str = "MULTIRES_ENABLE_PERF_TITLE";
 const UPLOAD_BUDGET_MB_ENV: &str = "MULTIRES_UPLOAD_BUDGET_MB";
+const MSAA_SAMPLES_ENV: &str = "MULTIRES_MSAA_SAMPLES";
 const ENABLE_DRONE_ENV: &str = "MULTIRES_ENABLE_DRONE";
 const DRONE_AGL_ENV: &str = "MULTIRES_DRONE_AGL_M";
 const DRONE_RADIUS_ENV: &str = "MULTIRES_DRONE_ORBIT_RADIUS_M";
@@ -188,6 +190,7 @@ struct BenchmarkSummary {
     frame_over_50ms_count: usize,
     latency_estimate_ms: f64,
     peak_rss_kib: u64,
+    msaa_samples: u32,
     benchmark_sweep_deg: f64,
     benchmark_sweep_period_s: f64,
     drone_enabled: bool,
@@ -455,6 +458,13 @@ fn env_usize(name: &str, default: usize) -> usize {
     env::var(name)
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(default)
+}
+
+fn env_u32(name: &str, default: u32) -> u32 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(default)
 }
 
@@ -823,6 +833,7 @@ fn initialize(
     if let Some(drone_orbit) = demo_drone_orbit.clone() {
         commands.insert_resource(drone_orbit);
     }
+    let msaa_samples = env_u32(MSAA_SAMPLES_ENV, 4);
 
     let mut view = Entity::PLACEHOLDER;
     commands.spawn_big_space(Grid::default(), |root| {
@@ -830,6 +841,7 @@ fn initialize(
             .spawn_spatial((
                 camera_transform,
                 PrimaryTerrainCamera,
+                Msaa::from_samples(msaa_samples),
                 DebugCameraController::new(RADIUS),
                 OrbitalCameraController::default(),
             ))
@@ -1296,6 +1308,7 @@ fn compute_summary(
         frame_over_50ms_count,
         latency_estimate_ms: frame_ms_p95,
         peak_rss_kib: peak_rss_kib(),
+        msaa_samples: env_u32(MSAA_SAMPLES_ENV, 4),
         benchmark_sweep_deg,
         benchmark_sweep_period_s,
         drone_enabled: env_bool(ENABLE_DRONE_ENV, !benchmark_mode_enabled()),
@@ -1378,6 +1391,7 @@ fn write_benchmark_outputs(
             "  \"frame_over_50ms_count\": {frame_over_50ms_count},\n",
             "  \"latency_estimate_ms\": {latency_estimate_ms:.6},\n",
             "  \"peak_rss_kib\": {peak_rss_kib},\n",
+            "  \"msaa_samples\": {msaa_samples},\n",
             "  \"benchmark_sweep_deg\": {benchmark_sweep_deg:.3},\n",
             "  \"benchmark_sweep_period_s\": {benchmark_sweep_period_s:.3},\n",
             "  \"drone_enabled\": {drone_enabled},\n",
@@ -1433,6 +1447,7 @@ fn write_benchmark_outputs(
         frame_over_50ms_count = summary.frame_over_50ms_count,
         latency_estimate_ms = summary.latency_estimate_ms,
         peak_rss_kib = summary.peak_rss_kib,
+        msaa_samples = summary.msaa_samples,
         benchmark_sweep_deg = summary.benchmark_sweep_deg,
         benchmark_sweep_period_s = summary.benchmark_sweep_period_s,
         drone_enabled = summary.drone_enabled,
@@ -1471,7 +1486,7 @@ fn write_benchmark_outputs(
             "scenario_name,overlays,present_mode,focus_label,focus_lat_deg,focus_lon_deg,benchmark_mode,debug_tools_enabled,perf_title_enabled,warmup_s,duration_s,sample_count,",
             "ready_wait_s,",
             "ready_atlas_count,ready_loaded_atlas_count,ready_loaded_tile_total,",
-            "fps_mean,frame_ms_mean,frame_ms_min,frame_ms_p50,frame_ms_p90,frame_ms_p95,frame_ms_p99,frame_ms_max,frame_over_25ms_count,frame_over_33ms_count,frame_over_50ms_count,latency_estimate_ms,peak_rss_kib,benchmark_sweep_deg,benchmark_sweep_period_s,drone_enabled,",
+            "fps_mean,frame_ms_mean,frame_ms_min,frame_ms_p50,frame_ms_p90,frame_ms_p95,frame_ms_p99,frame_ms_max,frame_over_25ms_count,frame_over_33ms_count,frame_over_50ms_count,latency_estimate_ms,peak_rss_kib,msaa_samples,benchmark_sweep_deg,benchmark_sweep_period_s,drone_enabled,",
             "hottest_phase_name,hottest_phase_mean_ms,hottest_phase_p95_ms,hottest_phase_max_ms,",
             "upload_budget_bytes_per_frame,terrain_view_buffer_updates_total,tile_tree_buffer_updates_total,tile_tree_buffer_skipped_total,",
             "tile_requests_total,tile_releases_total,canceled_pending_attachment_loads_total,canceled_inflight_attachment_loads_total,",
@@ -1479,7 +1494,7 @@ fn write_benchmark_outputs(
             "peak_pending_attachment_queue,peak_inflight_attachment_loads,peak_upload_backlog_attachment_tiles,canceled_stale_upload_attachment_tiles_total\n",
             "\"{scenario_name}\",\"{overlays_csv}\",\"{present_mode}\",\"{focus_label}\",{focus_lat_deg:.6},{focus_lon_deg:.6},{benchmark_mode},{debug_tools_enabled},{perf_title_enabled},{warmup_s:.3},{duration_s:.3},{sample_count},{ready_wait_s:.3},",
             "{ready_atlas_count},{ready_loaded_atlas_count},{ready_loaded_tile_total},",
-            "{fps_mean:.6},{frame_ms_mean:.6},{frame_ms_min:.6},{frame_ms_p50:.6},{frame_ms_p90:.6},{frame_ms_p95:.6},{frame_ms_p99:.6},{frame_ms_max:.6},{frame_over_25ms_count},{frame_over_33ms_count},{frame_over_50ms_count},{latency_estimate_ms:.6},{peak_rss_kib},{benchmark_sweep_deg:.3},{benchmark_sweep_period_s:.3},{drone_enabled},\"{hottest_phase_name}\",{hottest_phase_mean_ms:.6},{hottest_phase_p95_ms:.6},{hottest_phase_max_ms:.6},",
+            "{fps_mean:.6},{frame_ms_mean:.6},{frame_ms_min:.6},{frame_ms_p50:.6},{frame_ms_p90:.6},{frame_ms_p95:.6},{frame_ms_p99:.6},{frame_ms_max:.6},{frame_over_25ms_count},{frame_over_33ms_count},{frame_over_50ms_count},{latency_estimate_ms:.6},{peak_rss_kib},{msaa_samples},{benchmark_sweep_deg:.3},{benchmark_sweep_period_s:.3},{drone_enabled},\"{hottest_phase_name}\",{hottest_phase_mean_ms:.6},{hottest_phase_p95_ms:.6},{hottest_phase_max_ms:.6},",
             "{upload_budget_bytes_per_frame},{terrain_view_buffer_updates_total},{tile_tree_buffer_updates_total},{tile_tree_buffer_skipped_total},",
             "{tile_requests_total},{tile_releases_total},{canceled_pending_attachment_loads_total},{canceled_inflight_attachment_loads_total},",
             "{finished_attachment_loads_total},{upload_enqueued_attachment_tiles_total},{upload_enqueued_bytes_total},{upload_deferred_attachment_tiles_total},",
@@ -1514,6 +1529,7 @@ fn write_benchmark_outputs(
         frame_over_50ms_count = summary.frame_over_50ms_count,
         latency_estimate_ms = summary.latency_estimate_ms,
         peak_rss_kib = summary.peak_rss_kib,
+        msaa_samples = summary.msaa_samples,
         benchmark_sweep_deg = summary.benchmark_sweep_deg,
         benchmark_sweep_period_s = summary.benchmark_sweep_period_s,
         drone_enabled = summary.drone_enabled,

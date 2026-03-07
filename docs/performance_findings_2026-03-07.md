@@ -190,3 +190,47 @@ Important runtime constraints:
 
 Implication:
 - the next optimization pass should use GPU trace evidence instead of continuing to optimize CPU-side upload ordering heuristically
+
+## O3 Isolation: MSAA As A First-Order Latency Lever
+
+The Metal capture exposed a small pass inventory for the benchmarked frame:
+- repeated `(wgpu internal) Pre Pass`
+- `terrain_pass`
+- `main_opaque_pass_3d`
+- `early_mesh_preprocessing`
+- `late_mesh_preprocessing`
+- `upscaling`
+
+That made MSAA and the terrain depth path worth isolating directly.
+
+Short 2-trial Swiss moving-sweep comparison (`warmup=6s`, `measure=15s`, `UPLOAD_BUDGET_MB=24`):
+- `MSAA_SAMPLES=4`
+  - artifacts: `/tmp/terrain_bench_msaa4_isolation/summary.txt`
+  - FPS mean `36.86`
+  - frame mean `27.173 ms`
+  - p95 `43.907 ms`
+  - p99 `51.266 ms`
+- `MSAA_SAMPLES=1`
+  - artifacts: `/tmp/terrain_bench_msaa1_isolation/summary.txt`
+  - FPS mean `58.04`
+  - frame mean `17.230 ms`
+  - p95 `26.377 ms`
+  - p99 `35.934 ms`
+
+Interpretation:
+- on this machine, MSAA is not a marginal quality toggle; it is a major frame-time cost in the heavy Swiss overlay scene
+- `MSAA_SAMPLES=1` improved the benchmark by roughly:
+  - `+57%` FPS
+  - `-10 ms` mean frame time
+  - `-17.5 ms` p95
+  - `-15.3 ms` p99
+
+Additional finding:
+- the terrain depth-copy path was incorrectly hard-coded for multisampled depth textures and a 4x copy pipeline
+- this made `MSAA_SAMPLES=1` invalid before the fix
+- the renderer now has both single-sample and multisampled depth-copy variants, selected from the view's actual `Msaa` component
+
+Action:
+- keep MSAA configurable in the benchmark harness
+- treat `MSAA_SAMPLES=1` as the low-latency benchmark configuration for future optimization work unless image-quality validation says otherwise
+- keep `MSAA_SAMPLES=4` as the quality-control comparison
