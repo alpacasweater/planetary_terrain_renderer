@@ -214,7 +214,6 @@ impl GpuTerrain {
         for gpu_terrain in &mut gpu_terrains.values_mut() {
             let terrain_buffer = buffers.get(&gpu_terrain.terrain_buffer).unwrap();
 
-            // Todo: be smarter about bind group recreation
             gpu_terrain.terrain_bind_group = Some(device.create_bind_group(
                 "terrain_bind_group",
                 &TerrainBindGroup::bind_group_layout(&device),

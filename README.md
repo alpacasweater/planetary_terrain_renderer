@@ -1,10 +1,11 @@
 # Planetary Terrain Renderer
 
 A Bevy-based planetary terrain renderer with:
-- global base terrain + local high-resolution overlays
+- global base terrain plus local high-resolution overlays
 - large-world precision support
 - preprocessing pipeline for georeferenced rasters
-- benchmarking and visual capture tooling
+- benchmark and visual-capture tooling
+- physical-truth evaluation against `small_world`
 
 Project origin:
 - [bevy_terrain](https://github.com/kurtkuehnert/bevy_terrain)
@@ -18,7 +19,7 @@ From repo root:
 cargo run --example spherical
 ```
 
-Multi-resolution demo (base + overlays):
+Multi-resolution demo:
 
 ```bash
 cargo run --example spherical_multires
@@ -34,10 +35,27 @@ MULTIRES_OVERLAYS=none cargo run --example spherical_multires
 MULTIRES_OVERLAYS=swiss,los cargo run --example spherical_multires
 ```
 
+Swiss drone demo:
+
+```bash
+MULTIRES_OVERLAYS=swiss \
+MULTIRES_ENABLE_DRONE=1 \
+MULTIRES_DRONE_AGL_M=250 \
+MULTIRES_DRONE_ORBIT_RADIUS_M=1500 \
+cargo run --example spherical_multires
+```
+
+## Current Status
+
+- `cargo check --workspace` and `cargo test --workspace` are green.
+- Renderer-native WGS84 and local-frame transforms now agree with `small_world`.
+- Base Earth height parity is materially improved with `lod_count = 5`.
+- The rebuilt Swiss overlay is physically credible against its source DEM and supports the drone demo.
+- The main open work is performance: heavy-overlay tail latency, upload burstiness, render-path churn, and better GPU/pass attribution.
+
 ## Data and Preprocessing
 
-Use the preprocess CLI (or `preprocess/examples`) to convert GeoTIFF inputs into
-renderer assets under `assets/terrains/*`.
+Use the preprocess CLI (or `preprocess/examples`) to convert GeoTIFF inputs into renderer assets under `assets/terrains/*`.
 
 Primary workflow docs:
 - [Multi-resolution workflow](docs/multires_workflow.md)
@@ -76,9 +94,71 @@ Benchmark runner:
 
 Detailed benchmark usage and env vars:
 - [Performance benchmarking](docs/performance_benchmarking.md)
-
-Latest measured findings and optimization plan:
 - [Performance findings (2026-03-07)](docs/performance_findings_2026-03-07.md)
+
+## Correctness Metrics
+
+Ground-model alignment harness:
+
+```bash
+python3 scripts/compare_small_world_ground.py \
+  --lat 46.55 \
+  --lon 10.60 \
+  --hgt-root /path/to/hgt_tiles
+```
+
+Source-raster parity harness:
+
+```bash
+python3 scripts/compare_renderer_to_source_raster.py \
+  --lat 46.55 \
+  --lon 10.60 \
+  --terrain-root assets/terrains/earth \
+  --source-raster source_data/gebco_earth_small.tif
+```
+
+Multi-region truth matrix:
+
+```bash
+python3 scripts/physical_truth_matrix.py \
+  --json-out /tmp/physical_truth_matrix.json
+```
+
+End-to-end path regression:
+
+```bash
+python3 scripts/path_truth_regression.py \
+  --origin-lat 46.70 \
+  --origin-lon 10.40 \
+  --radius-m 1000 \
+  --commanded-agl-m 100 \
+  --sample-count 64 \
+  --truth-ground source_raster \
+  --terrain-root assets/terrains/swiss_highres \
+  --source-raster source_data/swiss.tif \
+  --json-out /tmp/swiss_overlay_path_truth_source.json
+```
+
+Direct geodesy truth tests:
+
+```bash
+cargo test math::geodesy::tests:: -- --nocapture
+cargo test renderer_wgs84_local_mapping_matches_small_world -- --nocapture
+cargo test small_world_ned_orbit_path_maps_to_renderer_local_positions -- --nocapture
+```
+
+Details:
+- [Correctness metrics](docs/correctness_metrics.md)
+- [Physical truth findings (2026-03-07)](docs/physical_truth_findings_2026-03-07.md)
+- [Physical truth mapping audit (2026-03-07)](docs/physical_truth_mapping_audit_2026-03-07.md)
+- [Physical truth plan (2026-03-07)](docs/physical_truth_orchestration_plan_2026-03-07.md)
+
+Important:
+- terrain assets generated before the 2026-03-07 physical-truth mapping fix are stale and should be reprocessed before treating ground/path residuals as authoritative
+- for `source_data/gebco_earth_small.tif`, the current physical-truth target for the base Earth height asset is `--lod-count 5`
+- for steep regional overlays, do not blindly force a low `--lod-count`; the local `swiss.tif` build requires `lod_count = 9` for acceptable source parity
+- the current local `small_world` HGT coverage only overlaps the eastern strip of `swiss.tif`, so the automated Swiss overlay vs `small_world` matrix is intentionally limited to that overlap
+- the preprocess CLI currently forces `GDAL_NUM_THREADS=1` because the custom transformer is not yet safely cloneable across GDAL worker threads
 
 ## Controls (Debug)
 
@@ -100,6 +180,11 @@ Quality toggles:
 
 GPU capture (macOS, `metal_capture` feature):
 - `C`: capture a frame (`captures/*.gputrace`)
+
+## Current Plans
+
+- [Optimization and tasking plan](docs/agent-orchestration-plan-2026-03-07.md)
+- [Physical truth plan](docs/physical_truth_orchestration_plan_2026-03-07.md)
 
 ## License
 

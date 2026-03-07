@@ -1,0 +1,5 @@
+---
+interface:
+  display_name: "Terrain Geodesy Truth"
+  short_description: "Validate renderer transforms against small_world"
+  default_prompt: "Use this skill when validating renderer WGS84 transforms, axis conventions, and ellipsoid semantics against small_world."

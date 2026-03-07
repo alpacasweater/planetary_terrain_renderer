@@ -330,6 +330,23 @@ impl LoadingImages {
         self.0.push((handle.id(), dimension, format));
         self
     }
+
+    pub fn finalize_ready_images(
+        &mut self,
+        asset_server: &AssetServer,
+        images: &mut Assets<Image>,
+    ) {
+        self.0.retain(|&(id, dimension, format)| {
+            if asset_server.load_state(id).is_loaded() {
+                let image = images.get_mut(id).unwrap();
+                image.texture_descriptor.dimension = dimension;
+                image.texture_descriptor.format = format;
+                false
+            } else {
+                true
+            }
+        });
+    }
 }
 
 fn finish_loading_images(
@@ -337,15 +354,5 @@ fn finish_loading_images(
     mut loading_images: ResMut<LoadingImages>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    loading_images.0.retain(|&(id, dimension, format)| {
-        if asset_server.load_state(id).is_loaded() {
-            let image = images.get_mut(id).unwrap();
-            image.texture_descriptor.dimension = dimension;
-            image.texture_descriptor.format = format;
-
-            false
-        } else {
-            true
-        }
-    });
+    loading_images.finalize_ready_images(&asset_server, &mut images);
 }

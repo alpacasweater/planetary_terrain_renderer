@@ -53,13 +53,11 @@ impl TerrainShape {
 
     pub fn position_unit_to_local(self, unit_position: DVec3, height: f64) -> DVec3 {
         let local_position = self.scale() * unit_position;
-        let local_normal = (self.scale()
-            * if self.is_spherical() {
-                unit_position
-            } else {
-                DVec3::Y
-            })
-        .normalize();
+        let local_normal = match self {
+            TerrainShape::Plane { .. } => DVec3::Y,
+            TerrainShape::Sphere { .. } => unit_position.normalize(),
+            TerrainShape::Spheroid { .. } => (unit_position / self.scale()).normalize(),
+        };
 
         local_position + height * local_normal
     }

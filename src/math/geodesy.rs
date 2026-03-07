@@ -6,6 +6,25 @@ pub const WGS84_FIRST_ECCENTRICITY_SQ: f64 = 0.006_694_379_990_141_33;
 pub const WGS84_SECOND_ECCENTRICITY_SQ: f64 =
     WGS84_FIRST_ECCENTRICITY_SQ / (1.0 - WGS84_FIRST_ECCENTRICITY_SQ);
 
+#[inline(always)]
+fn wgs84_renderer_scale() -> DVec3 {
+    DVec3::new(
+        WGS84_SEMIMAJOR_AXIS_M,
+        WGS84_SEMIMINOR_AXIS_M,
+        WGS84_SEMIMAJOR_AXIS_M,
+    )
+}
+
+#[inline(always)]
+fn renderer_local_from_ecef(ecef: DVec3) -> DVec3 {
+    DVec3::new(-ecef.x, ecef.z, ecef.y)
+}
+
+#[inline(always)]
+fn ecef_from_renderer_local(local: DVec3) -> DVec3 {
+    DVec3::new(-local.x, local.z, local.y)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LlaHae {
     pub lat_deg: f64,
@@ -57,18 +76,23 @@ impl GeoConversionParams {
 
 #[inline(always)]
 pub fn unit_from_lat_lon_degrees(lat_deg: f64, lon_deg: f64) -> DVec3 {
-    let lat = lat_deg.to_radians();
-    let lon = lon_deg.to_radians();
-    DVec3::new(-lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin())
+    let surface_ecef = lla_hae_to_ecef(LlaHae {
+        lat_deg,
+        lon_deg,
+        hae_m: 0.0,
+    });
+    let surface_local = renderer_local_from_ecef(surface_ecef);
+    (surface_local / wgs84_renderer_scale()).normalize()
 }
 
 #[inline(always)]
-/// Converts a renderer unit-sphere direction into geodetic latitude/longitude.
-/// The input is expected to be normalized.
+/// Converts a renderer ellipsoid-chart unit position into geodetic latitude/longitude.
+/// The input is expected to describe a point on the unit sphere chart used by the renderer.
 pub fn lat_lon_degrees_from_unit(unit_position: DVec3) -> (f64, f64) {
-    let lon_deg = unit_position.z.atan2(-unit_position.x).to_degrees();
-    let lat_deg = unit_position.y.asin().to_degrees();
-    (lat_deg, lon_deg)
+    let surface_local = wgs84_renderer_scale() * unit_position.normalize();
+    let surface_ecef = ecef_from_renderer_local(surface_local);
+    let lla = ecef_to_lla_hae(surface_ecef);
+    (lla.lat_deg, lla.lon_deg)
 }
 
 #[inline(always)]
@@ -138,6 +162,9 @@ mod tests {
         LlaHae, Ned, ecef_to_lla_hae, ecef_to_ned, lat_lon_degrees_from_unit, lla_hae_to_ecef,
         ned_to_ecef, unit_from_lat_lon_degrees,
     };
+    use bevy::math::DVec3;
+    use crate::math::TerrainShape;
+    use small_world::wgs84::{AltType, Lla as SwLla, Ned as SwNed};
 
     fn normalize_lon(lon_deg: f64) -> f64 {
         let mut lon = lon_deg % 360.0;
@@ -219,5 +246,259 @@ mod tests {
         assert!((round.n_m - ned.n_m).abs() < 1e-6);
         assert!((round.e_m - ned.e_m).abs() < 1e-6);
         assert!((round.d_m - ned.d_m).abs() < 1e-6);
+    }
+
+    fn renderer_local_from_small_world_lla(lat_deg: f64, lon_deg: f64, hae_m: f64) -> DVec3 {
+        let ecef = SwLla::new(lat_deg, lon_deg, hae_m, AltType::Wgs84).to_ecef();
+        DVec3::new(-ecef.x(), ecef.z(), ecef.y())
+    }
+
+    #[test]
+    fn small_world_lla_to_ecef_matches_renderer_geodesy() {
+        let cases = [
+            LlaHae {
+                lat_deg: 46.55,
+                lon_deg: 10.6,
+                hae_m: 2920.0,
+            },
+            LlaHae {
+                lat_deg: 25.7617,
+                lon_deg: -80.1918,
+                hae_m: 110.0,
+            },
+            LlaHae {
+                lat_deg: -33.9,
+                lon_deg: 151.2,
+                hae_m: 30.0,
+            },
+            LlaHae {
+                lat_deg: 0.0,
+                lon_deg: 0.0,
+                hae_m: 0.0,
+            },
+        ];
+
+        for lla in cases {
+            let renderer = lla_hae_to_ecef(lla);
+            let small_world = SwLla::new(lla.lat_deg, lla.lon_deg, lla.hae_m, AltType::Wgs84)
+                .to_ecef();
+
+            assert!((renderer.x - small_world.x()).abs() < 1e-6);
+            assert!((renderer.y - small_world.y()).abs() < 1e-6);
+            assert!((renderer.z - small_world.z()).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn small_world_ecef_to_lla_matches_renderer_geodesy() {
+        let cases = [
+            LlaHae {
+                lat_deg: 46.55,
+                lon_deg: 10.6,
+                hae_m: 2920.0,
+            },
+            LlaHae {
+                lat_deg: 25.7617,
+                lon_deg: -80.1918,
+                hae_m: 110.0,
+            },
+            LlaHae {
+                lat_deg: -33.9,
+                lon_deg: 151.2,
+                hae_m: 30.0,
+            },
+        ];
+
+        for lla in cases {
+            let ecef = SwLla::new(lla.lat_deg, lla.lon_deg, lla.hae_m, AltType::Wgs84).to_ecef();
+            let renderer = ecef_to_lla_hae(DVec3::new(ecef.x(), ecef.y(), ecef.z()));
+            let small_world = SwLla::from_ecef(ecef);
+
+            assert!((renderer.lat_deg - small_world.lat_deg()).abs() < 1e-9);
+            assert!((normalize_lon(renderer.lon_deg) - normalize_lon(small_world.lon_deg())).abs() < 1e-9);
+            assert!((renderer.hae_m - small_world.alt_m()).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn small_world_ned_to_ecef_matches_renderer_geodesy() {
+        let cases = [
+            (
+                LlaHae {
+                    lat_deg: 46.55,
+                    lon_deg: 10.6,
+                    hae_m: 2920.0,
+                },
+                Ned {
+                    n_m: 152.0,
+                    e_m: -88.5,
+                    d_m: 17.25,
+                },
+            ),
+            (
+                LlaHae {
+                    lat_deg: 25.7617,
+                    lon_deg: -80.1918,
+                    hae_m: 110.0,
+                },
+                Ned {
+                    n_m: -320.0,
+                    e_m: 45.0,
+                    d_m: -12.5,
+                },
+            ),
+        ];
+
+        for (origin, ned) in cases {
+            let renderer = ned_to_ecef(ned, origin);
+            let sw_origin =
+                SwLla::new(origin.lat_deg, origin.lon_deg, origin.hae_m, AltType::Wgs84);
+            let small_world = SwNed::new(ned.n_m, ned.e_m, ned.d_m, sw_origin).to_ecef();
+
+            assert!((renderer.x - small_world.x()).abs() < 1e-6);
+            assert!((renderer.y - small_world.y()).abs() < 1e-6);
+            assert!((renderer.z - small_world.z()).abs() < 1e-6);
+
+            let renderer_ned = ecef_to_ned(
+                DVec3::new(small_world.x(), small_world.y(), small_world.z()),
+                origin,
+            );
+            let small_world_ned = SwNed::from_ecef(small_world, sw_origin);
+
+            assert!((renderer_ned.n_m - small_world_ned.n()).abs() < 1e-6);
+            assert!((renderer_ned.e_m - small_world_ned.e()).abs() < 1e-6);
+            assert!((renderer_ned.d_m - small_world_ned.d()).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn unit_from_lat_lon_matches_small_world_wgs84_surface() {
+        let cases = [
+            (0.0, 0.0),
+            (46.55, 10.6),
+            (25.7617, -80.1918),
+            (-33.9, 151.2),
+            (89.5, 179.0),
+        ];
+
+        for (lat_deg, lon_deg) in cases {
+            let renderer_unit = unit_from_lat_lon_degrees(lat_deg, lon_deg);
+            let renderer_surface = TerrainShape::WGS84.scale() * renderer_unit;
+            let small_world_surface = renderer_local_from_small_world_lla(lat_deg, lon_deg, 0.0);
+
+            assert!((renderer_surface - small_world_surface).length() < 1e-3);
+
+            let (round_lat, round_lon) = lat_lon_degrees_from_unit(renderer_unit);
+            assert!((round_lat - lat_deg).abs() < 1e-9);
+            assert!((normalize_lon(round_lon) - normalize_lon(lon_deg)).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn renderer_wgs84_local_mapping_matches_small_world() {
+        let cases = [
+            (0.0, 0.0, 0.0),
+            (46.55, 10.6, 2920.0),
+            (25.7617, -80.1918, 110.0),
+            (-33.9, 151.2, 30.0),
+            (89.5, 179.0, 0.0),
+        ];
+
+        for (lat_deg, lon_deg, hae_m) in cases {
+            let renderer_local = crate::math::Coordinate::from_lat_lon_degrees(lat_deg, lon_deg)
+                .local_position(TerrainShape::WGS84, hae_m as f32);
+            let small_world_local = renderer_local_from_small_world_lla(lat_deg, lon_deg, hae_m);
+            let error_m = (renderer_local - small_world_local).length();
+
+            assert!(
+                error_m < 1e-3,
+                "renderer local mapping delta @ lat={lat_deg:.5}, lon={lon_deg:.5}, hae={hae_m:.2}: {error_m:.6} m"
+            );
+        }
+    }
+
+    #[test]
+    fn small_world_ned_orbit_path_maps_to_renderer_local_positions() {
+        let origins = [
+            LlaHae {
+                lat_deg: 46.55,
+                lon_deg: 10.6,
+                hae_m: 2920.0,
+            },
+            LlaHae {
+                lat_deg: 24.70,
+                lon_deg: -81.30,
+                hae_m: 0.0,
+            },
+            LlaHae {
+                lat_deg: -33.9,
+                lon_deg: 151.2,
+                hae_m: 30.0,
+            },
+        ];
+
+        for origin in origins {
+            let sw_origin =
+                SwLla::new(origin.lat_deg, origin.lon_deg, origin.hae_m, AltType::Wgs84);
+
+            for &radius_m in &[100.0_f64, 1000.0_f64] {
+                for sample_index in 0..64 {
+                    let theta = std::f64::consts::TAU * sample_index as f64 / 64.0;
+                    let ned = Ned {
+                        n_m: radius_m * theta.cos(),
+                        e_m: radius_m * theta.sin(),
+                        d_m: -120.0,
+                    };
+
+                    let sw_ecef = SwNed::new(ned.n_m, ned.e_m, ned.d_m, sw_origin).to_ecef();
+                    let sw_lla = SwLla::from_ecef(sw_ecef);
+
+                    let renderer_from_small_world_path =
+                        crate::math::Coordinate::from_lat_lon_degrees(
+                            sw_lla.lat_deg(),
+                            sw_lla.lon_deg(),
+                        )
+                        .local_position(TerrainShape::WGS84, sw_lla.alt_m() as f32);
+
+                    let renderer_from_small_world_ecef =
+                        DVec3::new(-sw_ecef.x(), sw_ecef.z(), sw_ecef.y());
+
+                    let direct_renderer_ecef = ned_to_ecef(ned, origin);
+                    let direct_renderer_local = DVec3::new(
+                        -direct_renderer_ecef.x,
+                        direct_renderer_ecef.z,
+                        direct_renderer_ecef.y,
+                    );
+
+                    let path_error_m = (
+                        renderer_from_small_world_path - renderer_from_small_world_ecef
+                    )
+                    .length();
+                    let ned_error_m = (direct_renderer_local - renderer_from_small_world_ecef)
+                        .length();
+
+                    assert!(
+                        path_error_m < 1e-3,
+                        "small_world orbit path mapping error @ origin=({:.5},{:.5},{:.2}) radius={:.1} sample={} => {:.6} m",
+                        origin.lat_deg,
+                        origin.lon_deg,
+                        origin.hae_m,
+                        radius_m,
+                        sample_index,
+                        path_error_m
+                    );
+                    assert!(
+                        ned_error_m < 1e-6,
+                        "renderer ned/ecef mismatch @ origin=({:.5},{:.5},{:.2}) radius={:.1} sample={} => {:.9} m",
+                        origin.lat_deg,
+                        origin.lon_deg,
+                        origin.hae_m,
+                        radius_m,
+                        sample_index,
+                        ned_error_m
+                    );
+                }
+            }
+        }
     }
 }

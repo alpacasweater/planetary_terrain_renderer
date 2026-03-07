@@ -122,36 +122,44 @@ pub fn compute_transforms<'a>(
         });
     }
 
+    let mut suggested_max_lod = 0;
+
+    for transform in &transforms {
+        // GDAL uses a heuristic to compute the output dimensions in pixels by setting the same
+        // number of pixels on the diagonal on both the input and output projections. Since we
+        // have up to six different output images, this heuristic must be modified a bit. Since
+        // the S2 projection with a quadratic mapping is quite area-uniform, we divide the total
+        // GDAL based output image into the six output images by their area proportion of the
+        // total output.
+        let uv_size = transform.uv_end - transform.uv_start;
+        let correction = uv_size.element_product().sqrt() / total_area.sqrt();
+        let size = (transform.size.as_dvec2() * correction).round();
+
+        suggested_max_lod = suggested_max_lod.max(
+            (size / context.attachment.center_size() as f64 / uv_size)
+                .max_element()
+                .log2()
+                .ceil() as u32,
+        );
+    }
+
     let max_lod = if let Some(lod_count) = context.lod_count {
-        lod_count - 1
-    } else {
-        let mut max_lod = 0;
+        let explicit_max_lod = lod_count - 1;
 
-        for transform in &mut transforms {
-            // GDAL uses a heuristic to compute the output dimensions in pixels by setting
-            // the same number of pixels on the diagonal on both the input and output
-            // projections. Since we have up to six different output images, this
-            // heuristic must be modified a bit. Since the S2 projection with a
-            // quadratic mapping is quite area-uniform, we divide the total GDAL based
-            // output image into the six output images by their area proportion of the total
-            // output.
-
-            let uv_size = transform.uv_end - transform.uv_start;
-
-            let correction = uv_size.element_product().sqrt() / total_area.sqrt();
-            let size = (transform.size.as_dvec2() * correction).round();
-
-            max_lod = max_lod.max(
-                (size / context.attachment.center_size() as f64 / uv_size)
-                    .max_element()
-                    .log2()
-                    .ceil() as u32,
+        if explicit_max_lod < suggested_max_lod {
+            let undersample_factor = 1u32 << (suggested_max_lod - explicit_max_lod);
+            eprintln!(
+                "warning: explicit lod_count={} undersamples the source raster; heuristic suggests lod_count={} (about {}x higher face resolution)",
+                lod_count,
+                suggested_max_lod + 1,
+                undersample_factor,
             );
         }
 
-        context.lod_count = Some(max_lod + 1);
-
-        max_lod
+        explicit_max_lod
+    } else {
+        context.lod_count = Some(suggested_max_lod + 1);
+        suggested_max_lod
     };
 
     let pixel_size = 1.0 / ((1 << max_lod) * context.attachment.center_size()) as f64;

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Terrain Release Verifier"
+  short_description: "Validate build, correctness, and perf gates"
+  default_prompt: "Use this skill when validating that planetary_terrain_renderer meets build, benchmark, and correctness gates before merge."

@@ -99,15 +99,39 @@ impl GpuTileAtlas {
         mut main_world: ResMut<MainWorld>,
         mut gpu_tile_atlases: ResMut<TerrainComponents<GpuTileAtlas>>,
     ) {
+        let budget_bytes = main_world
+            .resource::<TerrainSettings>()
+            .upload_budget_bytes_per_frame;
         let mut tile_atlases = main_world.query::<(Entity, &mut TileAtlas)>();
 
         for (terrain, mut tile_atlas) in tile_atlases.iter_mut(&mut main_world) {
             let gpu_tile_atlas = gpu_tile_atlases.get_mut(&terrain).unwrap();
+            let mut upload_tiles = Vec::new();
+            let mut deferred_tiles = Vec::new();
+            let mut queued_bytes = 0usize;
 
-            mem::swap(
-                &mut tile_atlas.uploading_tiles,
-                &mut gpu_tile_atlas.upload_tiles,
+            for tile in mem::take(&mut tile_atlas.uploading_tiles) {
+                let tile_bytes = tile.data.bytes().len();
+                let fits_budget = budget_bytes == 0
+                    || upload_tiles.is_empty()
+                    || queued_bytes + tile_bytes <= budget_bytes;
+
+                if fits_budget {
+                    queued_bytes += tile_bytes;
+                    upload_tiles.push(tile);
+                } else {
+                    deferred_tiles.push(tile);
+                }
+            }
+
+            let deferred_count = deferred_tiles.len();
+            tile_atlas.uploading_tiles = deferred_tiles;
+            let backlog_count = tile_atlas.uploading_tiles.len();
+            tile_atlas.note_upload_deferred_attachment_tiles(
+                deferred_count,
+                backlog_count,
             );
+            gpu_tile_atlas.upload_tiles = upload_tiles;
 
             for attachment in gpu_tile_atlas.attachments.values_mut() {
                 attachment

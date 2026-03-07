@@ -16,29 +16,54 @@ Per trial, the example writes:
 - `trial_N.csv`: one-row CSV summary
 
 Metrics include:
+- `benchmark_mode`
+- `debug_tools_enabled`
+- `perf_title_enabled`
 - `fps_mean`
 - `frame_ms_mean`
 - `frame_ms_p50/p90/p95/p99`
 - `latency_estimate_ms` (currently `p95`)
-- `ready_wait_s` (time spent waiting for terrain tiles to be loaded before warmup starts)
+- `ready_wait_s`
+- `ready_atlas_count`
+- `ready_loaded_atlas_count`
+- `ready_loaded_tile_total`
+- `upload_budget_bytes_per_frame`
+- `terrain_view_buffer_updates_total`
+- `tile_tree_buffer_updates_total`
+- `tile_tree_buffer_skipped_total`
+- `tile_requests_total`
+- `tile_releases_total`
+- `canceled_pending_attachment_loads_total`
+- `canceled_inflight_attachment_loads_total`
+- `finished_attachment_loads_total`
+- `upload_enqueued_attachment_tiles_total`
+- `upload_enqueued_bytes_total`
+- `upload_deferred_attachment_tiles_total`
+- `peak_pending_attachment_queue`
+- `peak_inflight_attachment_loads`
+- `peak_upload_backlog_attachment_tiles`
 - `sample_count`
 
 After all trials, the script writes:
 - `summary.csv`: one row per trial
-- `summary.txt`: aggregate statistics (mean and worst/best)
+- `summary.txt`: aggregate statistics
+- optional PNG captures under `CAPTURE_DIR`
 
 ## Default Benchmark Settings
 
 - `TRIALS=3`
 - `WARMUP_SECONDS=8`
 - `DURATION_SECONDS=20`
-- `READY_TIMEOUT_SECONDS=120` (script-level env passed to example as `MULTIRES_BENCHMARK_READY_TIMEOUT_SECONDS`)
+- `READY_TIMEOUT_SECONDS=120`
 - `PRESENT_MODE=auto_novsync`
 - `OVERLAYS=swiss`
 - `CAMERA_ALT_M=90000`
 - `CAMERA_BACKOFF_M=150000`
-- `CAPTURE_DIR` unset by default (set to enable PNG captures)
-- `CAPTURE_FRAMES=120,360,720` (frame numbers to capture when `CAPTURE_DIR` is set)
+- `CAPTURE_DIR` unset by default
+- `CAPTURE_FRAMES=120,360,720`
+- `ENABLE_DEBUG_TOOLS=0`
+- `ENABLE_PERF_TITLE=0`
+- `UPLOAD_BUDGET_MB=16`
 
 ## Useful Overrides
 
@@ -57,7 +82,19 @@ CAPTURE_FRAMES=240,480 \
 ./scripts/benchmark_spherical_multires.sh
 ```
 
-## Direct Example Benchmark Mode (without script)
+Single-run capture for visual validation:
+
+```bash
+OUT_DIR=/tmp/terrain_bench_smoke \
+TRIALS=1 \
+WARMUP_SECONDS=2 \
+DURATION_SECONDS=8 \
+CAPTURE_DIR=/tmp/terrain_bench_smoke_captures \
+CAPTURE_FRAMES=60 \
+./scripts/benchmark_spherical_multires.sh
+```
+
+## Direct Example Benchmark Mode
 
 ```bash
 cd /Users/biggsba1/Documents/Playground/planetary_terrain_renderer
@@ -78,9 +115,10 @@ This writes:
 ## Notes
 
 - `auto_novsync` is preferred for throughput benchmarking.
-- Benchmarking now waits until terrain atlases report loaded tiles before warmup/measurement.
+- Benchmarking waits until terrain atlases report loaded tiles before warmup and measurement.
 - The script sets `BEVY_ASSET_ROOT` so release-binary launches resolve project `assets/` reliably.
-- The example supports PNG capture envs directly:
-  `MULTIRES_CAPTURE_DIR` and `MULTIRES_CAPTURE_FRAMES`.
-- Use fixed overlay/camera settings when comparing runs.
-- Keep machine load stable; close heavy background tasks to reduce jitter.
+- The runner disables debug/picking and title-update overhead unless re-enabled with `ENABLE_DEBUG_TOOLS=1` or `ENABLE_PERF_TITLE=1`.
+- Upload pressure is limited by `UPLOAD_BUDGET_MB` in the runner and `MULTIRES_UPLOAD_BUDGET_MB` in the example. Set it to `0` to benchmark without throttling.
+- The example supports PNG capture envs directly: `MULTIRES_CAPTURE_DIR` and `MULTIRES_CAPTURE_FRAMES`.
+- Use fixed overlay and camera settings when comparing runs.
+- GPU-backed runs are required for meaningful captures and timings; sandboxed runs on this machine do not expose a GPU.

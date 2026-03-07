@@ -74,7 +74,8 @@ pub mod prelude {
         spawn::SpawnTerrainCommandsExt,
         terrain::TerrainConfig,
         terrain_data::{
-            AttachmentConfig, AttachmentFormat, AttachmentLabel, GpuTileAtlas, TileAtlas, TileTree,
+            AttachmentConfig, AttachmentFormat, AttachmentLabel, GpuTileAtlas, TileAtlas,
+            TileAtlasPerfCounters, TileTree, TileTreePerfCounters,
         },
         terrain_view::{TerrainViewComponents, TerrainViewConfig},
     };

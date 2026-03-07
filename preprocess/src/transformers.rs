@@ -2,10 +2,7 @@ use crate::{
     gdal_extension::{GDALCustomTransformer, GDALTransformerInfo, Transformer},
     result::{PreprocessError, PreprocessResult},
 };
-use bevy_terrain::math::{
-    Coordinate,
-    geodesy::{lat_lon_degrees_from_unit, unit_from_lat_lon_degrees},
-};
+use bevy_terrain::math::Coordinate;
 use gdal::{Dataset, GeoTransform, GeoTransformEx, errors::GdalError, spatial_ref::SpatialRef};
 use gdal_sys::{
     GDALCreateReprojectionTransformerEx, GDALDestroyReprojectionTransformer,
@@ -134,7 +131,7 @@ impl Transformer for CubeTransformer {
                 izip!(lon_or_u.iter_mut(), lat_or_v.iter_mut(), success.iter_mut())
             {
                 let coordinate = Coordinate::new(self.face, (*lon_or_u, *lat_or_v).into());
-                let (lat_deg, lon_deg) = lat_lon_degrees_from_unit(coordinate.unit_position(true));
+                let (lat_deg, lon_deg) = coordinate.lat_lon_degrees();
 
                 *success = *success && !lat_deg.is_nan();
                 *lon_or_u = lon_deg;
@@ -144,9 +141,8 @@ impl Transformer for CubeTransformer {
             for (lon_or_u, lat_or_v, success) in
                 izip!(lon_or_u.iter_mut(), lat_or_v.iter_mut(), success.iter_mut())
             {
-                let unit_position = unit_from_lat_lon_degrees(*lat_or_v, *lon_or_u);
-
-                let coordinate = Coordinate::from_unit_position(unit_position, true);
+                let coordinate = Coordinate::from_lat_lon_degrees(*lat_or_v, *lon_or_u);
+                let unit_position = coordinate.unit_position(true);
 
                 *success = *success
                     && (unit_position.length() - 1.0).abs() < 0.00001
@@ -193,7 +189,7 @@ impl CustomTransformer {
         dst_geo_transform: Option<GeoTransform>,
     ) -> PreprocessResult<GDALCustomTransformer> {
         Ok(GDALCustomTransformer {
-            info: GDALTransformerInfo::new(clone_custom_transformer),
+            info: GDALTransformerInfo::new(),
             inner: Box::new(Self {
                 src_inverse_geo_transform: src.geo_transform()?.invert()?,
                 dst_geo_transform,

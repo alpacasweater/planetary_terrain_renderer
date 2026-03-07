@@ -25,8 +25,8 @@ mod tile_tree;
 pub use self::{
     attachment::{AttachmentConfig, AttachmentFormat, AttachmentLabel},
     gpu_tile_atlas::GpuTileAtlas,
-    tile_atlas::TileAtlas,
-    tile_tree::TileTree,
+    tile_atlas::{TileAtlas, TileAtlasPerfCounters},
+    tile_tree::{TileTree, TileTreePerfCounters},
 };
 
 pub(crate) use self::{attachment::*, gpu_attachment::*, tile_loader::*, tile_tree::*};

@@ -1,0 +1,5 @@
+---
+interface:
+  display_name: "Terrain Raster Truth"
+  short_description: "Audit preprocess and runtime sample parity"
+  default_prompt: "Use this skill when tracing raster values from source data through preprocessing into runtime terrain sampling."

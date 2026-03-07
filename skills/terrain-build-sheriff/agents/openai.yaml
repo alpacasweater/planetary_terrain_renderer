@@ -1,0 +1,4 @@
+interface:
+  display_name: "Terrain Build Sheriff"
+  short_description: "Repair workspace build and test health"
+  default_prompt: "Use this skill when fixing workspace build failures, dependency mismatches, and validation gates in planetary_terrain_renderer."

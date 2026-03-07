@@ -1,0 +1,4 @@
+interface:
+  display_name: "Terrain Benchmark Profiler"
+  short_description: "Benchmark and profile the terrain renderer"
+  default_prompt: "Use this skill when benchmarking planetary_terrain_renderer, capturing evidence, and profiling CPU or GPU bottlenecks."

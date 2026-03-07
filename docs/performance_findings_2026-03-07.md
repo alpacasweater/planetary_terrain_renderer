@@ -2,7 +2,7 @@
 
 ## Scope
 Rigorous benchmark pass for `examples/spherical_multires.rs` with:
-- moving benchmark camera sweep (crosses overlay boundary to include high-res and low-res terrain)
+- moving benchmark camera sweep
 - automatic PNG capture during each trial
 - 5 scenarios x 3 trials each
 - warmup 6s, measure 15s
@@ -10,89 +10,73 @@ Rigorous benchmark pass for `examples/spherical_multires.rs` with:
 Run root:
 - `/tmp/terrain_bench_rigorous_sweep_capture_20260307_010416`
 
-## Scenarios
-- `base_only_fast`: `OVERLAYS=none`, `PRESENT_MODE=auto_novsync`
-- `swiss_fast`: `OVERLAYS=swiss`, `PRESENT_MODE=auto_novsync`
-- `saxony_fast`: `OVERLAYS=saxony`, `PRESENT_MODE=auto_novsync`
-- `los_fast`: `OVERLAYS=los`, `PRESENT_MODE=auto_novsync`
-- `swiss_vsync`: `OVERLAYS=swiss`, `PRESENT_MODE=auto_vsync`
+## Aggregate Results
 
-## Aggregate Results (per-scenario averages over 3 trials)
+| Scenario | FPS mean | frame ms mean | p95 mean (ms) | worst p95 (ms) | ready wait mean (s) |
+|---|---:|---:|---:|---:|---:|
+| base_only_fast | 49.38 | 20.253 | 32.128 | 32.416 | 0.157 |
+| los_fast | 57.66 | 17.342 | 20.061 | 20.204 | 0.024 |
+| saxony_fast | 57.31 | 17.449 | 20.864 | 21.531 | 0.065 |
+| swiss_fast | 40.72 | 24.586 | 39.970 | 40.506 | 0.097 |
+| swiss_vsync | 49.48 | 20.350 | 25.493 | 28.072 | 0.025 |
 
-| Scenario | FPS mean | FPS stdev | frame ms mean | p95 mean (ms) | worst p95 (ms) | ready wait mean (s) |
-|---|---:|---:|---:|---:|---:|---:|
-| base_only_fast | 49.38 | 0.45 | 20.253 | 32.128 | 32.416 | 0.157 |
-| los_fast | 57.66 | 0.04 | 17.342 | 20.061 | 20.204 | 0.024 |
-| saxony_fast | 57.31 | 0.22 | 17.449 | 20.864 | 21.531 | 0.065 |
-| swiss_fast | 40.72 | 1.39 | 24.586 | 39.970 | 40.506 | 0.097 |
-| swiss_vsync | 49.48 | 4.24 | 20.350 | 25.493 | 28.072 | 0.025 |
+## Visual Validation
 
-## Visual Validation (PNG captures)
-All trials produced captures with non-trivial image variance (not blank frames):
-- minimum grayscale stddev by scenario/trial was >10
-- unique grayscale levels per image ranged ~160-233
-- no capture was flagged blank-like
+All trials produced nonblank captures.
 
-## Deficiencies vs “Snappy / Low-Latency” Goals
+## Snappy-Execution Deficiencies
+
 1. Tail latency is the main problem, not average FPS.
-- In heavy Swiss overlay, p95 ~40ms (25 FPS-class tail), with visible jitter risk.
-- Even base-only p95 ~32ms indicates frame pacing instability under movement/LOD change.
+- Heavy Swiss overlay stays around `~40 ms` p95 in the capture-validated sweep.
 
-2. Overlay-dependent performance spread is large.
-- `swiss_fast` is significantly worse than `saxony_fast`/`los_fast` on both mean and p95.
-- This points to workload sensitivity to tile density/complexity and/or churn policy.
+2. Overlay-dependent spread is still large.
+- `swiss_fast` remains substantially worse than `saxony_fast` and `los_fast`.
 
-3. Warmup/startup spikes are still high.
-- Early-frame spikes >100ms appeared repeatedly before settling.
-- This degrades perceived responsiveness when launching or changing view.
+3. Warmup and startup spikes are still high.
+- Early-frame spikes above `100 ms` remain visible.
 
-4. Frame pacing remains uneven under camera sweep.
-- Even with stable ready-state, periodic spikes persist.
-- “Snappy feel” suffers despite moderate average FPS.
+4. Frame pacing is still uneven under motion.
+- The heavy overlay case still has visible jitter headroom even when terrain is loaded.
 
-5. Benchmark reproducibility was previously fragile.
-- Fixed now by asset-root and automated PNG capture, but benchmark mode still shares runtime paths with interactive debug toggles.
+## Follow-up Experiment: Tile-Tree Upload Gating
 
-## Precision-Safe Optimization Plan
-Goal: reduce latency variance and tail (p95/p99), preserve geodesy/math correctness.
+Change:
+- `TileTree::update_terrain_view_buffer` now skips the large `tile_tree_buffer` upload when the best-tile entries are unchanged.
 
-### Phase 1: Deterministic benchmarking and observability (low risk)
-- Add dedicated benchmark mode gate that disables runtime debug hotkeys/toggles only (not geodesy/math).
-- Record additional metrics per frame:
-  - raw `dt` p99/max (not only smoothed diagnostics)
-  - tile request/release counts per second
-  - GPU frame time if available from backend counters
-- Extend benchmark output with:
-  - p99/max frame time
-  - outlier count above thresholds (e.g. >25ms, >33ms, >50ms)
+Measurement:
+- baseline run: `/tmp/terrain_bench_budget16/trial_1.json`
+- follow-up run: `/tmp/terrain_bench_tiletree_counters_fixed/trial_1.json`
 
-Expected impact: no precision change; better diagnosis and stable perf testing.
+Observed metrics:
+- baseline `fps_mean`: `49.42`
+- follow-up `fps_mean`: `48.89`
+- baseline `frame_ms_p95`: `26.196`
+- follow-up `frame_ms_p95`: `29.704`
+- follow-up `tile_tree_buffer_updates_total`: `29`
+- follow-up `tile_tree_buffer_skipped_total`: `665`
 
-### Phase 2: Reduce tile churn and burstiness (precision-neutral)
-- Add/request hysteresis around LOD transition distances to reduce request/release thrash during motion.
-- Rate-limit tile request bursts per frame (token bucket), smoothing CPU/GPU upload workload.
-- Pre-warm likely-visible neighbor tiles in background at lower priority.
+Conclusion:
+- the optimization was active
+- it did not improve frame-time tails materially
+- tile-tree storage uploads are not the primary latency lever
 
-Expected impact: lower p95/p99 and fewer stutters; same coordinate precision and terrain accuracy.
+## Current Optimization Status
 
-### Phase 3: Upload/render pipeline smoothing (precision-neutral)
-- Move expensive upload/staging work off critical frame path where possible.
-- Cap per-frame GPU upload bytes to avoid occasional long frames.
-- Evaluate atlas residency policy to retain recently-used tiles longer in heavy overlays.
+Completed:
+- workspace build/test baseline is green
+- benchmark mode is stable and capture-validated
+- correctness tooling is in place, so performance work can be checked against physical-truth gates
+- tile-tree upload gating was tested and shown not to be the primary latency lever
 
-Expected impact: improved frame pacing with unchanged geospatial correctness.
+Open bottlenecks:
+1. tile streaming churn in heavy overlays
+2. upload backlog spikes and staging pressure
+3. render-path buffer and bind-group churn
+4. missing GPU pass attribution for the worst frame-time tails
 
-### Phase 4: Camera-motion-aware scheduling (precision-neutral)
-- Predict short-horizon camera trajectory and prioritize tiles in motion direction.
-- Downgrade eviction priority for tiles likely to re-enter view soon.
+## Current Optimization Priority
 
-Expected impact: smoother motion in sweep/drone-like paths; no geodesy precision tradeoff.
-
-### Phase 5: Optional quality/perf knobs (explicitly non-default)
-- Add optional benchmark/runtime tuning profile for reduced detail in non-critical far-field only.
-- Keep physically-correct mapping and high-precision transforms untouched as default.
-
-Expected impact: configurable speedups without reducing physical correctness unless user opts in.
-
-## Recommendation
-Prioritize Phase 1 + 2 immediately. They target the observed bottleneck (tail latency and jitter) and do not alter geodetic math, coordinate transforms, or terrain truth-model precision.
+1. add stronger tile request prioritization, hysteresis, and stale-load cancellation
+2. reduce upload burstiness and backlog spikes
+3. eliminate avoidable render and extract buffer rewrites and bind-group recreation
+4. add GPU timing or capture-backed attribution so future tuning targets measured passes, not guesses

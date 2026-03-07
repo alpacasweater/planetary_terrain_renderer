@@ -31,6 +31,7 @@ use big_space::prelude::*;
 pub struct TerrainSettings {
     pub attachments: Vec<AttachmentLabel>,
     pub atlas_size: u32,
+    pub upload_budget_bytes_per_frame: usize,
 }
 
 impl Default for TerrainSettings {
@@ -38,6 +39,7 @@ impl Default for TerrainSettings {
         Self {
             attachments: vec![AttachmentLabel::Height],
             atlas_size: 1028,
+            upload_budget_bytes_per_frame: 16 * 1024 * 1024,
         }
     }
 }
@@ -54,7 +56,13 @@ impl TerrainSettings {
         Self {
             attachments,
             atlas_size: 1028,
+            upload_budget_bytes_per_frame: 16 * 1024 * 1024,
         }
+    }
+
+    pub fn with_upload_budget_bytes_per_frame(mut self, upload_budget_bytes_per_frame: usize) -> Self {
+        self.upload_budget_bytes_per_frame = upload_budget_bytes_per_frame;
+        self
     }
 }
 

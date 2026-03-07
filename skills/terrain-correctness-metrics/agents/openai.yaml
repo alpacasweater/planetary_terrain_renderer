@@ -1,0 +1,4 @@
+interface:
+  display_name: "Terrain Correctness Metrics"
+  short_description: "Measure renderer and small_world alignment"
+  default_prompt: "Use this skill when adding or validating metrics for renderer ground level, placement error, and small_world alignment."

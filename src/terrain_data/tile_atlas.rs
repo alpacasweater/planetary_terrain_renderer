@@ -2,7 +2,7 @@ use crate::{
     math::{TerrainShape, TileCoordinate},
     plugin::TerrainSettings,
     render::TerrainUniform,
-    terrain::TerrainConfig,
+    terrain::{CURRENT_GEODETIC_MAPPING_VERSION, TerrainConfig},
     terrain_data::{
         Attachment, AttachmentData, AttachmentLabel, AttachmentTile, AttachmentTileWithData,
         DefaultLoader, TileTree, TileTreeEntry,
@@ -39,6 +39,23 @@ struct TileState {
     atlas_index: u32,
     /// The count of [`TileTrees`] that have requested this tile.
     requests: u32,
+    /// Monotonic sequence number used for request prioritization.
+    request_sequence: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TileAtlasPerfCounters {
+    pub tile_requests_total: u64,
+    pub tile_releases_total: u64,
+    pub canceled_pending_attachment_loads_total: u64,
+    pub canceled_inflight_attachment_loads_total: u64,
+    pub finished_attachment_loads_total: u64,
+    pub upload_enqueued_attachment_tiles_total: u64,
+    pub upload_enqueued_bytes_total: u64,
+    pub upload_deferred_attachment_tiles_total: u64,
+    pub peak_pending_attachment_queue: usize,
+    pub peak_inflight_attachment_loads: usize,
+    pub peak_upload_backlog_attachment_tiles: usize,
 }
 
 // Todo: rename to terrain?
@@ -75,6 +92,8 @@ pub struct TileAtlas {
     pub(crate) shape: TerrainShape,
 
     pub(crate) terrain_buffer: Handle<ShaderStorageBuffer>,
+    next_request_sequence: u64,
+    perf_counters: TileAtlasPerfCounters,
 }
 
 impl TileAtlas {
@@ -93,12 +112,66 @@ impl TileAtlas {
         self.existing_tiles.len()
     }
 
+    pub fn perf_counters(&self) -> TileAtlasPerfCounters {
+        self.perf_counters
+    }
+
+    pub(crate) fn is_tile_requested(&self, tile_coordinate: TileCoordinate) -> bool {
+        self.tile_states
+            .get(&tile_coordinate)
+            .map(|tile| tile.requests > 0)
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn loading_priority(
+        &self,
+        tile_coordinate: TileCoordinate,
+    ) -> Option<(u32, std::cmp::Reverse<u32>, u64)> {
+        self.tile_states.get(&tile_coordinate).and_then(|tile| {
+            (tile.requests > 0).then_some((
+                tile.requests,
+                std::cmp::Reverse(tile_coordinate.lod),
+                tile.request_sequence,
+            ))
+        })
+    }
+
+    pub(crate) fn note_inflight_attachment_loads(&mut self, count: usize) {
+        self.perf_counters.peak_inflight_attachment_loads =
+            self.perf_counters.peak_inflight_attachment_loads.max(count);
+    }
+
+    pub(crate) fn note_canceled_inflight_attachment_loads(&mut self, count: u64) {
+        self.perf_counters.canceled_inflight_attachment_loads_total += count;
+    }
+
+    pub(crate) fn note_upload_deferred_attachment_tiles(
+        &mut self,
+        deferred_count: usize,
+        backlog_count: usize,
+    ) {
+        self.perf_counters.upload_deferred_attachment_tiles_total += deferred_count as u64;
+        self.perf_counters.peak_upload_backlog_attachment_tiles = self
+            .perf_counters
+            .peak_upload_backlog_attachment_tiles
+            .max(backlog_count);
+    }
+
     /// Creates a new tile_tree from a terrain config.
     pub fn new(
         config: &TerrainConfig,
         buffers: &mut Assets<ShaderStorageBuffer>,
         settings: &TerrainSettings,
     ) -> Self {
+        if config.geodetic_mapping_version < CURRENT_GEODETIC_MAPPING_VERSION {
+            warn!(
+                "Terrain config '{}' uses geodetic_mapping_version={} but the renderer expects {}. Reprocess this terrain to remove stale pre-2026-03-07 mapping semantics.",
+                config.path,
+                config.geodetic_mapping_version,
+                CURRENT_GEODETIC_MAPPING_VERSION
+            );
+        }
+
         let attachments = config
             .attachments
             .iter()
@@ -124,6 +197,8 @@ impl TileAtlas {
             height_scale: 1.0,
             shape: config.shape,
             terrain_buffer,
+            next_request_sequence: 1,
+            perf_counters: default(),
         }
     }
 
@@ -166,13 +241,20 @@ impl TileAtlas {
                 }
             };
 
+            self.perf_counters.finished_attachment_loads_total += 1;
+            self.perf_counters.upload_enqueued_attachment_tiles_total += 1;
+            self.perf_counters.upload_enqueued_bytes_total += data.bytes().len() as u64;
             self.uploading_tiles.push(AttachmentTileWithData {
                 atlas_index: tile_state.atlas_index,
                 label: tile.label,
                 data,
             });
+            self.perf_counters.peak_upload_backlog_attachment_tiles = self
+                .perf_counters
+                .peak_upload_backlog_attachment_tiles
+                .max(self.uploading_tiles.len());
         } else {
-            dbg!("Tile is no longer loaded.");
+            debug!("Tile finished loading after cancellation: {:?}", tile.coordinate);
         }
     }
 
@@ -209,12 +291,17 @@ impl TileAtlas {
             return;
         }
 
+        self.perf_counters.tile_requests_total += 1;
+        let request_sequence = self.next_request_sequence;
+        self.next_request_sequence += 1;
+
         // check if the tile is already present else start loading it
         if let Some(tile) = self.tile_states.get_mut(&tile_coordinate) {
             if tile.requests == 0 {
                 // the tile is now used again
                 self.unused_indices
                     .retain(|&atlas_index| tile.atlas_index != atlas_index);
+                tile.request_sequence = request_sequence;
             }
 
             tile.requests += 1;
@@ -233,6 +320,7 @@ impl TileAtlas {
                     requests: 1,
                     state: LoadingState::Loading(self.attachments.len() as u32),
                     atlas_index,
+                    request_sequence,
                 },
             );
 
@@ -242,6 +330,10 @@ impl TileAtlas {
                     label: label.clone(),
                 });
             }
+            self.perf_counters.peak_pending_attachment_queue = self
+                .perf_counters
+                .peak_pending_attachment_queue
+                .max(self.to_load.len());
         }
     }
 
@@ -250,13 +342,31 @@ impl TileAtlas {
             return;
         }
 
-        let tile = self.tile_states.get_mut(&tile_coordinate).unwrap();
-        tile.requests -= 1;
+        self.perf_counters.tile_releases_total += 1;
 
-        if tile.requests == 0 {
-            self.unused_indices.push_back(tile.atlas_index);
+        let (requests, state, atlas_index) = {
+            let tile = self.tile_states.get_mut(&tile_coordinate).unwrap();
+            tile.requests -= 1;
+            (tile.requests, tile.state, tile.atlas_index)
+        };
 
-            // Todo: we should cancel loading tiles, that have not yet started loading and a no longer requested
+        if requests != 0 {
+            return;
+        }
+
+        match state {
+            LoadingState::Loading(_) => {
+                self.tile_states.remove(&tile_coordinate);
+                let pending_before = self.to_load.len();
+                self.to_load
+                    .retain(|tile| tile.coordinate != tile_coordinate);
+                self.perf_counters.canceled_pending_attachment_loads_total +=
+                    (pending_before - self.to_load.len()) as u64;
+                self.unused_indices.push_back(atlas_index);
+            }
+            LoadingState::Loaded => {
+                self.unused_indices.push_back(atlas_index);
+            }
         }
     }
 }

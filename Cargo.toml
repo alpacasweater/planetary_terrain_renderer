@@ -38,6 +38,9 @@ rand = { version = "0.9.0", optional = true }
 metal = { version = "0.31.0", optional = true } # keep in sync with bevy's wgpu
 wgpu-core = { version = "24.0.2", optional = true } # keep in sync with bevy's wgpu
 
+[dev-dependencies]
+small_world = { git = "ssh://git@github.com/Swarm-Command/small_world.git", rev = "002e0275003c993923c907954d3e131685b42cbf" }
+
 [[example]]
 name = "spherical"
 path = "examples/spherical.rs"

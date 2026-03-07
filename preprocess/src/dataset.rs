@@ -75,6 +75,7 @@ pub struct PreprocessContext {
     pub(crate) fill_radius: f32,
     pub(crate) create_mask: bool,
     pub(crate) overwrite: bool,
+    pub(crate) keep_temp: bool,
 
     pub(crate) min_height: f32,
     pub(crate) max_height: f32,
@@ -92,6 +93,7 @@ impl PreprocessContext {
             terrain_path,
             temp_path,
             overwrite,
+            keep_temp,
             no_data,
             data_type,
             fill_radius,
@@ -122,6 +124,7 @@ impl PreprocessContext {
             fill_radius,
             create_mask,
             overwrite,
+            keep_temp,
         )
     }
 
@@ -140,6 +143,7 @@ impl PreprocessContext {
         fill_radius: f32,
         create_mask: bool,
         overwrite: bool,
+        keep_temp: bool,
     ) -> PreprocessResult<(Dataset, Self)> {
         let mut src_datasets = src_path
             .iter()
@@ -207,6 +211,7 @@ impl PreprocessContext {
                 temp_dir,
                 fill_radius,
                 overwrite,
+                keep_temp,
                 min_height: f32::MAX,
                 max_height: f32::MIN,
                 create_mask,

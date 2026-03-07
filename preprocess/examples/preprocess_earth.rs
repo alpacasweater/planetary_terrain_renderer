@@ -7,6 +7,7 @@ fn main() {
         src_path: vec!["source_data/gebco_earth.tif".into()],
         terrain_path: "assets/terrains/earth".into(),
         temp_path: None,
+        keep_temp: false,
         overwrite: true,
         no_data: PreprocessNoData::Source,
         data_type: PreprocessDataType::DataType(GdalDataType::Float32),
@@ -22,12 +23,13 @@ fn main() {
 
     let (src_dataset, mut context) = PreprocessContext::from_cli(args).unwrap();
 
-    preprocess(src_dataset, &mut context);
+    preprocess(src_dataset, &mut context).expect("earth height preprocess should succeed");
 
     let args = Cli {
         src_path: vec!["source_data/true_marble.tif".into()],
         terrain_path: "assets/terrains/earth".into(),
         temp_path: None,
+        keep_temp: false,
         overwrite: true,
         no_data: PreprocessNoData::NoData(0.0),
         data_type: PreprocessDataType::DataType(GdalDataType::UInt8),
@@ -43,5 +45,5 @@ fn main() {
 
     let (src_dataset, mut context) = PreprocessContext::from_cli(args).unwrap();
 
-    preprocess(src_dataset, &mut context);
+    preprocess(src_dataset, &mut context).expect("earth albedo preprocess should succeed");
 }

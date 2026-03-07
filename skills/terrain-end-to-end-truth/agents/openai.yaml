@@ -1,0 +1,5 @@
+---
+interface:
+  display_name: "Terrain End-To-End Truth"
+  short_description: "Validate robot and path placement against the rendered world"
+  default_prompt: "Use this skill when measuring whether small_world-derived robot, drone, or path positions align with the rendered terrain."

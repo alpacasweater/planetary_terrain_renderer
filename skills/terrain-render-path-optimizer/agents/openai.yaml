@@ -1,0 +1,4 @@
+interface:
+  display_name: "Terrain Render Path Optimizer"
+  short_description: "Reduce render-path churn and overhead"
+  default_prompt: "Use this skill when optimizing bind groups, GPU buffers, render passes, and frame pacing in planetary_terrain_renderer."

@@ -18,7 +18,7 @@ use bevy::{
     },
 };
 use big_space::prelude::*;
-use itertools::{Itertools, iproduct};
+use itertools::iproduct;
 use ndarray::Array4;
 use std::{cmp::Ordering, iter};
 
@@ -56,7 +56,7 @@ impl Default for TileState {
 /// These entries are synced each frame with their equivalent representations in the
 /// [`GpuTileTree`](super::gpu_tile_tree::GpuTileTree) for access on the GPU.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, ShaderType)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ShaderType)]
 pub(crate) struct TileTreeEntry {
     /// The atlas index of the best entry.
     pub(crate) atlas_index: u32,
@@ -75,6 +75,13 @@ impl Default for TileTreeEntry {
 
 #[derive(Component)]
 pub struct TerrainViewKey((Entity, Entity));
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TileTreePerfCounters {
+    pub terrain_view_buffer_updates_total: u64,
+    pub tile_tree_buffer_updates_total: u64,
+    pub tile_tree_buffer_skipped_total: u64,
+}
 
 /// A quadtree-like view of a terrain, that requests and releases tiles from the [`TileAtlas`]
 /// depending on the distance to the viewer.
@@ -129,6 +136,8 @@ pub struct TileTree {
     pub(crate) surface_approximation: [crate::math::SurfaceApproximation; 6],
     pub(crate) approximate_height: f32,
     pub(crate) order: u32,
+    tile_tree_buffer_dirty: bool,
+    perf_counters: TileTreePerfCounters,
 
     pub(crate) tile_tree_buffer: Handle<ShaderStorageBuffer>,
     pub(crate) terrain_view_buffer: Handle<ShaderStorageBuffer>,
@@ -210,10 +219,16 @@ impl TileTree {
             surface_approximation: default(),
             approximate_height: 0.0,
             order: view_config.order,
+            tile_tree_buffer_dirty: true,
+            perf_counters: TileTreePerfCounters::default(),
             tile_tree_buffer,
             terrain_view_buffer,
             approximate_height_buffer,
         }
+    }
+
+    pub fn perf_counters(&self) -> TileTreePerfCounters {
+        self.perf_counters
     }
 
     fn compute_tree_xy(coordinate: Coordinate, tile_count: f64) -> DVec2 {
@@ -360,10 +375,17 @@ impl TileTree {
     ) {
         for (&(terrain, _view), tile_tree) in tile_trees.iter_mut() {
             let tile_atlas = tile_atlases.get(terrain).unwrap();
+            let mut tile_tree_buffer_dirty = false;
 
             for (tile, entry) in iter::zip(&tile_tree.tiles, &mut tile_tree.data) {
-                *entry = tile_atlas.get_best_tile(tile.coordinate);
+                let next_entry = tile_atlas.get_best_tile(tile.coordinate);
+                if *entry != next_entry {
+                    *entry = next_entry;
+                    tile_tree_buffer_dirty = true;
+                }
             }
+
+            tile_tree.tile_tree_buffer_dirty |= tile_tree_buffer_dirty;
         }
     }
 
@@ -381,17 +403,24 @@ impl TileTree {
     }
 
     pub fn update_terrain_view_buffer(
-        tile_trees: Res<TerrainViewComponents<TileTree>>,
+        mut tile_trees: ResMut<TerrainViewComponents<TileTree>>,
         mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
     ) {
-        for tile_tree in tile_trees.values() {
+        for tile_tree in tile_trees.values_mut() {
             let terrain_view_buffer = buffers.get_mut(&tile_tree.terrain_view_buffer).unwrap();
-            terrain_view_buffer.set_data(TerrainViewUniform::from(tile_tree));
+            terrain_view_buffer.set_data(TerrainViewUniform::from(&*tile_tree));
+            tile_tree.perf_counters.terrain_view_buffer_updates_total += 1;
 
-            let tile_tree_buffer = buffers.get_mut(&tile_tree.tile_tree_buffer).unwrap();
-            tile_tree_buffer.set_data(TileTreeUniform {
-                entries: tile_tree.data.clone().into_iter().collect_vec(),
-            });
+            if tile_tree.tile_tree_buffer_dirty {
+                let tile_tree_buffer = buffers.get_mut(&tile_tree.tile_tree_buffer).unwrap();
+                tile_tree_buffer.set_data(TileTreeUniform {
+                    entries: tile_tree.data.iter().copied().collect(),
+                });
+                tile_tree.tile_tree_buffer_dirty = false;
+                tile_tree.perf_counters.tile_tree_buffer_updates_total += 1;
+            } else {
+                tile_tree.perf_counters.tile_tree_buffer_skipped_total += 1;
+            }
         }
     }
 

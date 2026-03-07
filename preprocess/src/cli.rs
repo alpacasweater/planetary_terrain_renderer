@@ -22,6 +22,8 @@ pub struct Cli {
 
     #[arg(short, long, default_value_t = false)]
     pub overwrite: bool,
+    #[arg(long, default_value_t = false)]
+    pub keep_temp: bool,
     #[arg(long, default_value = "source")]
     pub no_data: PreprocessNoData,
     #[arg(long, default_value = "source")]

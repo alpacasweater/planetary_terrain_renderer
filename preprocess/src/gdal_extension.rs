@@ -29,12 +29,6 @@ pub extern "C" fn unused_function(_: *mut c_void) -> *mut c_void {
     ptr::null_mut()
 }
 
-type CreateSimilarFunc = unsafe extern "C" fn(
-    transformer_arg: *mut c_void,
-    src_ratio_x: f64,
-    src_ratio_y: f64,
-) -> *mut c_void;
-
 #[repr(C)]
 pub struct GDALTransformerInfo {
     aby_signature: [u8; 4],
@@ -42,18 +36,21 @@ pub struct GDALTransformerInfo {
     pfn_transform: UnusedFunction, // function pointer, that must not be accessed
     pfn_cleanup: UnusedFunction,   // function pointer, that must not be accessed
     pfn_serialize: UnusedFunction, // function pointer, that must not be accessed
-    pfn_create_similar: Option<CreateSimilarFunc>,
+    pfn_create_similar: Option<unsafe extern "C" fn(*mut c_void, f64, f64) -> *mut c_void>,
 }
 
 impl GDALTransformerInfo {
-    pub(crate) fn new(similar_func: CreateSimilarFunc) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             aby_signature: *b"GTI2",
             psz_class_name: c"Test".as_ptr(),
             pfn_transform: unused_function,
             pfn_cleanup: unused_function,
             pfn_serialize: unused_function,
-            pfn_create_similar: Some(similar_func),
+            // ReprojectionTransformer wraps libproj state that is not safe to reuse across
+            // GDAL worker threads. Until we have real per-thread cloning and cleanup, keep
+            // similar-transformer cloning disabled so warp stays correct and stable.
+            pfn_create_similar: None,
         }
     }
 }

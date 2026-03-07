@@ -17,6 +17,9 @@ PRESENT_MODE="${PRESENT_MODE:-auto_novsync}"
 RUST_LOG_LEVEL="${RUST_LOG_LEVEL:-perf=info}"
 CAPTURE_DIR="${CAPTURE_DIR:-}"
 CAPTURE_FRAMES="${CAPTURE_FRAMES:-120,360,720}"
+ENABLE_DEBUG_TOOLS="${ENABLE_DEBUG_TOOLS:-0}"
+ENABLE_PERF_TITLE="${ENABLE_PERF_TITLE:-0}"
+UPLOAD_BUDGET_MB="${UPLOAD_BUDGET_MB:-16}"
 
 mkdir -p "$OUT_DIR"
 
@@ -45,6 +48,9 @@ for trial in $(seq 1 "$TRIALS"); do
   MULTIRES_CAMERA_ALT_M="$CAMERA_ALT_M" \
   MULTIRES_CAMERA_BACKOFF_M="$CAMERA_BACKOFF_M" \
   MULTIRES_PRESENT_MODE="$PRESENT_MODE" \
+  MULTIRES_ENABLE_DEBUG_TOOLS="$ENABLE_DEBUG_TOOLS" \
+  MULTIRES_ENABLE_PERF_TITLE="$ENABLE_PERF_TITLE" \
+  MULTIRES_UPLOAD_BUDGET_MB="$UPLOAD_BUDGET_MB" \
   MULTIRES_CAPTURE_DIR="$capture_dir_trial" \
   MULTIRES_CAPTURE_FRAMES="$CAPTURE_FRAMES" \
   MULTIRES_BENCHMARK_READY_TIMEOUT_SECONDS="$READY_TIMEOUT_SECONDS" \
@@ -62,10 +68,10 @@ summary_txt="$OUT_DIR/summary.txt"
 
 echo "== Aggregating results =="
 {
-  echo "trial,ready_wait_s,fps_mean,frame_ms_mean,frame_ms_p95,latency_estimate_ms,sample_count"
+  echo "trial,debug_tools_enabled,perf_title_enabled,ready_wait_s,ready_atlas_count,ready_loaded_atlas_count,ready_loaded_tile_total,fps_mean,frame_ms_mean,frame_ms_p95,latency_estimate_ms,sample_count"
   for csv in "$OUT_DIR"/trial_*.csv; do
     trial_name="$(basename "$csv" .csv)"
-    awk -F, -v trial="$trial_name" 'NR==2 {printf "%s,%s,%s,%s,%s,%s,%s\n", trial, $7, $8, $9, $13, $16, $6}' "$csv"
+    awk -F, -v trial="$trial_name" 'NR==2 {printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n", trial, $5, $6, $10, $11, $12, $13, $14, $15, $19, $22, $9}' "$csv"
   done
 } > "$summary_csv"
 
@@ -73,9 +79,9 @@ awk -F, '
 NR==1 {next}
 {
   n++;
-  ready_wait+=$2; fps+=$3; frame_mean+=$4; p95+=$5; latency+=$6;
-  if ($5 > p95_max || n == 1) p95_max=$5;
-  if ($4 < frame_best || n == 1) frame_best=$4;
+  ready_wait+=$4; fps+=$8; frame_mean+=$9; p95+=$10; latency+=$11;
+  if ($10 > p95_max || n == 1) p95_max=$10;
+  if ($9 < frame_best || n == 1) frame_best=$9;
 }
 END {
   if (n == 0) {

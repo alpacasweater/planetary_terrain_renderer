@@ -1,0 +1,4 @@
+interface:
+  display_name: "Terrain Streaming Optimizer"
+  short_description: "Reduce tile churn and upload bursts"
+  default_prompt: "Use this skill when optimizing tile scheduling, loading, uploads, and atlas residency in planetary_terrain_renderer."

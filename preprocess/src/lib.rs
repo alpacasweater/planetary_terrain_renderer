@@ -15,9 +15,11 @@ use crate::{
     downsample::downsample_and_stitch,
     fill_no_data::create_mask_and_fill_no_data,
     reproject::reproject,
+    result::PreprocessResult,
     split::split_and_stitch,
 };
 use bevy_terrain::prelude::*;
+use bevy_terrain::terrain::{CURRENT_GEODETIC_MAPPING_VERSION, CURRENT_TERRAIN_FORMAT_VERSION};
 use gdal::{
     Dataset,
     raster::{GdalDataType, GdalType},
@@ -36,7 +38,7 @@ pub mod prelude {
 fn preprocess_gen<T: Copy + GdalType + PartialEq + NumCast>(
     src_dataset: Dataset,
     context: &mut PreprocessContext,
-) {
+) -> PreprocessResult<()> {
     if context.overwrite {
         clear_directory(&context.tile_dir);
     }
@@ -46,29 +48,33 @@ fn preprocess_gen<T: Copy + GdalType + PartialEq + NumCast>(
     let start_preprocessing = Instant::now();
 
     let progress_bar = PreprocessBar::new("Reprojecting".to_string());
-    let faces = reproject::<T>(src_dataset, context, Some(progress_bar.callback())).unwrap();
+    let faces = reproject::<T>(src_dataset, context, Some(progress_bar.callback()))?;
     progress_bar.finish();
 
     let progress_bar = PreprocessBar::new("Splitting".to_string());
-    let tiles = split_and_stitch::<T>(faces, context, Some(progress_bar.callback())).unwrap();
+    let tiles = split_and_stitch::<T>(faces, context, Some(progress_bar.callback()))?;
     progress_bar.finish();
 
     let progress_bar = PreprocessBar::new("Downsampling".to_string());
-    let tiles = downsample_and_stitch::<T>(&tiles, context, Some(progress_bar.callback())).unwrap();
+    let tiles = downsample_and_stitch::<T>(&tiles, context, Some(progress_bar.callback()))?;
     progress_bar.finish();
 
     let progress_bar = PreprocessBar::new("Filling".to_string());
-    create_mask_and_fill_no_data(&tiles, context, Some(progress_bar.callback())).unwrap();
+    create_mask_and_fill_no_data(&tiles, context, Some(progress_bar.callback()))?;
     progress_bar.finish();
 
-    delete_directory(&context.temp_dir);
+    if !context.keep_temp {
+        delete_directory(&context.temp_dir);
+    }
 
     save_terrain_config(tiles, context);
 
     println!("Preprocessing took: {:?}", start_preprocessing.elapsed());
+
+    Ok(())
 }
 
-pub fn preprocess(src_dataset: Dataset, context: &mut PreprocessContext) {
+pub fn preprocess(src_dataset: Dataset, context: &mut PreprocessContext) -> PreprocessResult<()> {
     macro_rules! preprocess_gen {
         ($data_type:ty) => {
             preprocess_gen::<$data_type>(src_dataset, context)
@@ -76,7 +82,7 @@ pub fn preprocess(src_dataset: Dataset, context: &mut PreprocessContext) {
     }
 
     match context.data_type {
-        GdalDataType::Unknown => panic!("Unknown data type!"),
+        GdalDataType::Unknown => Err(crate::result::PreprocessError::UnknownRasterbandDataType),
         GdalDataType::UInt8 => preprocess_gen!(u8),
         GdalDataType::UInt16 => preprocess_gen!(u16),
         GdalDataType::UInt32 => preprocess_gen!(u32),
@@ -87,7 +93,7 @@ pub fn preprocess(src_dataset: Dataset, context: &mut PreprocessContext) {
         GdalDataType::Int64 => preprocess_gen!(i64),
         GdalDataType::Float32 => preprocess_gen!(f32),
         GdalDataType::Float64 => preprocess_gen!(f64),
-    };
+    }
 }
 
 fn save_terrain_config(tiles: Vec<TileCoordinate>, context: &PreprocessContext) {
@@ -95,6 +101,8 @@ fn save_terrain_config(tiles: Vec<TileCoordinate>, context: &PreprocessContext) 
 
     let mut config = TerrainConfig::load_file(&file_path).unwrap_or_default();
 
+    config.format_version = CURRENT_TERRAIN_FORMAT_VERSION;
+    config.geodetic_mapping_version = CURRENT_GEODETIC_MAPPING_VERSION;
     config.shape = TerrainShape::WGS84;
     config.path = context.terrain_path.to_str().unwrap().to_string();
     config.add_attachment(context.attachment_label.clone(), context.attachment.clone());
