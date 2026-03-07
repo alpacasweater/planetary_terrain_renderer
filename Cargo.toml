@@ -42,6 +42,9 @@ wgpu-hal = { version = "27.0.4", optional = true } # keep in sync with bevy's wg
 [dev-dependencies]
 small_world = { git = "ssh://git@github.com/Swarm-Command/small_world.git", rev = "002e0275003c993923c907954d3e131685b42cbf" }
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("webgpu"))'] }
+
 [[example]]
 name = "spherical"
 path = "examples/spherical.rs"

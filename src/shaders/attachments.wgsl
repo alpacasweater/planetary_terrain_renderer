@@ -113,33 +113,12 @@ fn compute_slope(world_normal: vec3<f32>, surface_gradient: vec3<f32>) -> f32 {
     return acos(cos_slope); // slope in radians
 }
 
-fn random_unit_vector(seed: f32) -> vec3<f32> {
-    let angle1 = fract(sin(seed * 12.9898) * 43758.5453) * 6.28318;
-    let angle2 = fract(cos(seed * 78.233) * 43758.5453) * 3.14159;
-
-    let x = sin(angle2) * cos(angle1);
-    let y = sin(angle2) * sin(angle1);
-    let z = cos(angle2);
-
-    return vec3<f32>(x, y, z);
-}
-
-// Todo: clean up relief shading
 fn relief_shading(world_coordinate: WorldCoordinate, surface_gradient: vec3<f32>) -> f32 {
-    let seed = 6.0;
-    let num_lights = 4;  // Number of lights in the cone
-    let theta_max = 0.8; // Max cone angle (radians), adjust for stronger effect
     let scale = 0.5 * log2(world_coordinate.view_distance);
     let normal = normalize(world_coordinate.normal - scale * surface_gradient);
+    let light_dir = normalize(world_coordinate.normal + vec3<f32>(0.35, 0.45, 0.2));
+    let direct = max(dot(normal, light_dir), 0.0);
+    let hemi = 0.5 + 0.5 * dot(normal, world_coordinate.normal);
 
-    var total_intensity = 0.0;
-
-    for (var i = 0; i < num_lights; i = i + 1) {
-        // Generate a random point in the cone around world_normal
-        let rand_offset = random_unit_vector(seed + f32(i));
-        let light_dir = normalize(world_coordinate.normal + theta_max * rand_offset);
-        total_intensity += max(dot(normal, light_dir), 0.0);
-    }
-
-    return total_intensity / f32(num_lights);
+    return clamp(0.3 + 0.55 * direct + 0.15 * hemi, 0.2, 1.0);
 }

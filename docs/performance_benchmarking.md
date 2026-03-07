@@ -84,7 +84,7 @@ After all trials, the script writes:
 - `ENABLE_PERF_TITLE=0`
 - `ENABLE_DRONE=0`
 - `UPLOAD_BUDGET_MB=24`
-- `MSAA_SAMPLES=4`
+- `MSAA_SAMPLES=1`
 - `EXAMPLE_FEATURES` unset by default
 - `METAL_CAPTURE_ENABLED=0`
 - `METAL_CAPTURE_FRAME` unset by default
@@ -200,8 +200,10 @@ This writes:
 - The runner disables debug/picking and title-update overhead unless re-enabled with `ENABLE_DEBUG_TOOLS=1` or `ENABLE_PERF_TITLE=1`.
 - Upload pressure is limited by `UPLOAD_BUDGET_MB` in the runner and `MULTIRES_UPLOAD_BUDGET_MB` in the example. Set it to `0` to benchmark without throttling.
 - MSAA is controlled by `MSAA_SAMPLES` in the runner and `MULTIRES_MSAA_SAMPLES` in the example.
-- Current CPU-side phase attribution shows the Swiss sweep is dominated by `render.prepare.gpu_tile_atlas`, and within that phase by texture uploads rather than mip bind-group setup.
-- Short Swiss isolation runs on this machine showed `MSAA_SAMPLES=1` materially outperforms `MSAA_SAMPLES=4`, so MSAA should be treated as a first-class benchmark dimension rather than an implicit default.
+- `MSAA_SAMPLES=1` is the current low-latency benchmark default. Keep `MSAA_SAMPLES=4` for quality-control comparisons rather than day-to-day optimization work.
+- Short Swiss isolation runs on this machine showed `MSAA_SAMPLES=1` materially outperforms `MSAA_SAMPLES=4`.
+- On the accepted `MSAA_SAMPLES=1` baseline, the simplified terrain relief shader moved the Swiss sweep from about `60.97 FPS / 16.40 ms mean / 25.21 ms p95` to about `99.55 FPS / 10.05 ms mean / 15.23 ms p95`.
+- Terrain-lighting toggles are useful for controlled isolation only. The optimized baseline keeps terrain lighting enabled.
 - The example supports PNG capture envs directly: `MULTIRES_CAPTURE_DIR` and `MULTIRES_CAPTURE_FRAMES`.
 - The example also supports one-shot Metal capture envs when built with `--features metal_capture`: `MULTIRES_METAL_CAPTURE_FRAME` and `MULTIRES_METAL_CAPTURE_DIR`.
 - Use fixed overlay and camera settings when comparing runs.

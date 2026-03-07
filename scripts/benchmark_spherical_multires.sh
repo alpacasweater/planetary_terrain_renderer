@@ -24,11 +24,16 @@ ENABLE_DEBUG_TOOLS="${ENABLE_DEBUG_TOOLS:-0}"
 ENABLE_PERF_TITLE="${ENABLE_PERF_TITLE:-0}"
 ENABLE_DRONE="${ENABLE_DRONE:-0}"
 UPLOAD_BUDGET_MB="${UPLOAD_BUDGET_MB:-24}"
-MSAA_SAMPLES="${MSAA_SAMPLES:-4}"
+MSAA_SAMPLES="${MSAA_SAMPLES:-1}"
+TERRAIN_LIGHTING="${TERRAIN_LIGHTING:-1}"
+TERRAIN_MORPH="${TERRAIN_MORPH:-1}"
+TERRAIN_BLEND="${TERRAIN_BLEND:-1}"
+TERRAIN_SAMPLE_GRAD="${TERRAIN_SAMPLE_GRAD:-1}"
+TERRAIN_HIGH_PRECISION="${TERRAIN_HIGH_PRECISION:-1}"
 METAL_CAPTURE_ENABLED="${METAL_CAPTURE_ENABLED:-0}"
 METAL_CAPTURE_FRAME="${METAL_CAPTURE_FRAME:-}"
 METAL_CAPTURE_DIR="${METAL_CAPTURE_DIR:-}"
-SCENARIO_NAME="${SCENARIO_NAME:-${OVERLAYS}_${PRESENT_MODE}_sweep${BENCHMARK_SWEEP_DEG}_drone${ENABLE_DRONE}}"
+SCENARIO_NAME="${SCENARIO_NAME:-${OVERLAYS}_${PRESENT_MODE}_msaa${MSAA_SAMPLES}_sweep${BENCHMARK_SWEEP_DEG}_drone${ENABLE_DRONE}}"
 
 mkdir -p "$OUT_DIR"
 
@@ -81,6 +86,11 @@ for trial in $(seq 1 "$TRIALS"); do
   MULTIRES_ENABLE_DRONE="$ENABLE_DRONE" \
   MULTIRES_UPLOAD_BUDGET_MB="$UPLOAD_BUDGET_MB" \
   MULTIRES_MSAA_SAMPLES="$MSAA_SAMPLES" \
+  MULTIRES_TERRAIN_LIGHTING="$TERRAIN_LIGHTING" \
+  MULTIRES_TERRAIN_MORPH="$TERRAIN_MORPH" \
+  MULTIRES_TERRAIN_BLEND="$TERRAIN_BLEND" \
+  MULTIRES_TERRAIN_SAMPLE_GRAD="$TERRAIN_SAMPLE_GRAD" \
+  MULTIRES_TERRAIN_HIGH_PRECISION="$TERRAIN_HIGH_PRECISION" \
   METAL_CAPTURE_ENABLED="$METAL_CAPTURE_ENABLED" \
   MULTIRES_METAL_CAPTURE_FRAME="$METAL_CAPTURE_FRAME" \
   MULTIRES_METAL_CAPTURE_DIR="$METAL_CAPTURE_DIR" \
@@ -125,10 +135,54 @@ summary_txt="$OUT_DIR/summary.txt"
 
 echo "== Aggregating results =="
 {
-  echo "trial,scenario_name,overlays,present_mode,drone_enabled,debug_tools_enabled,perf_title_enabled,ready_wait_s,ready_atlas_count,ready_loaded_atlas_count,ready_loaded_tile_total,fps_mean,frame_ms_mean,frame_ms_p95,frame_ms_p99,frame_ms_max,frame_over_25ms_count,frame_over_33ms_count,frame_over_50ms_count,latency_estimate_ms,peak_rss_kib,msaa_samples,sample_count"
+  echo "trial,scenario_name,overlays,present_mode,drone_enabled,debug_tools_enabled,perf_title_enabled,terrain_lighting_enabled,terrain_morph_enabled,terrain_blend_enabled,terrain_sample_grad_enabled,terrain_high_precision_enabled,ready_wait_s,ready_atlas_count,ready_loaded_atlas_count,ready_loaded_tile_total,fps_mean,frame_ms_mean,frame_ms_p95,frame_ms_p99,frame_ms_max,frame_over_25ms_count,frame_over_33ms_count,frame_over_50ms_count,latency_estimate_ms,peak_rss_kib,msaa_samples,sample_count"
   for csv in "$OUT_DIR"/trial_*.csv; do
     trial_name="$(basename "$csv" .csv)"
-    awk -F, -v trial="$trial_name" 'NR==2 {printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n", trial, $1, $2, $3, $33, $8, $9, $13, $14, $15, $16, $17, $18, $22, $23, $24, $25, $26, $27, $28, $29, $30, $12}' "$csv"
+    awk -F, -v trial="$trial_name" '
+      NR==1 {
+        for (i = 1; i <= NF; i++) {
+          gsub(/^"|"$/, "", $i);
+          idx[$i] = i;
+        }
+        next;
+      }
+      NR==2 {
+        fields[1] = "scenario_name";
+        fields[2] = "overlays";
+        fields[3] = "present_mode";
+        fields[4] = "drone_enabled";
+        fields[5] = "debug_tools_enabled";
+        fields[6] = "perf_title_enabled";
+        fields[7] = "terrain_lighting_enabled";
+        fields[8] = "terrain_morph_enabled";
+        fields[9] = "terrain_blend_enabled";
+        fields[10] = "terrain_sample_grad_enabled";
+        fields[11] = "terrain_high_precision_enabled";
+        fields[12] = "ready_wait_s";
+        fields[13] = "ready_atlas_count";
+        fields[14] = "ready_loaded_atlas_count";
+        fields[15] = "ready_loaded_tile_total";
+        fields[16] = "fps_mean";
+        fields[17] = "frame_ms_mean";
+        fields[18] = "frame_ms_p95";
+        fields[19] = "frame_ms_p99";
+        fields[20] = "frame_ms_max";
+        fields[21] = "frame_over_25ms_count";
+        fields[22] = "frame_over_33ms_count";
+        fields[23] = "frame_over_50ms_count";
+        fields[24] = "latency_estimate_ms";
+        fields[25] = "peak_rss_kib";
+        fields[26] = "msaa_samples";
+        fields[27] = "sample_count";
+        printf "%s", trial;
+        for (j = 1; j <= 27; j++) {
+          key = fields[j];
+          value = (key in idx) ? $(idx[key]) : "";
+          printf ",%s", value;
+        }
+        printf "\n";
+      }
+    ' "$csv"
   done
 } > "$summary_csv"
 
@@ -136,10 +190,10 @@ awk -F, '
 NR==1 {next}
 {
   n++;
-  ready_wait+=$8; fps+=$12; frame_mean+=$13; p95+=$14; p99+=$15; latency+=$20; rss+=$21;
-  if ($14 > p95_max || n == 1) p95_max=$14;
-  if ($15 > p99_max || n == 1) p99_max=$15;
-  if ($13 < frame_best || n == 1) frame_best=$13;
+  ready_wait+=$13; fps+=$17; frame_mean+=$18; p95+=$19; p99+=$20; latency+=$25; rss+=$26;
+  if ($19 > p95_max || n == 1) p95_max=$19;
+  if ($20 > p99_max || n == 1) p99_max=$20;
+  if ($18 < frame_best || n == 1) frame_best=$18;
 }
 END {
   if (n == 0) {

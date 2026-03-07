@@ -70,17 +70,17 @@ Completed:
 - phase attribution now identifies the current Swiss heavy-overlay hotspot instead of only whole-frame tails
 
 Open bottlenecks:
-1. tile streaming churn in heavy overlays
-2. upload backlog spikes and staging pressure
-3. render-path buffer and bind-group churn
-4. true GPU execution timing is still missing; current attribution is CPU-side only
+1. true GPU execution timing is still missing; remaining work is increasingly GPU-bound
+2. terrain depth and main-pass overhead still need controlled isolation on the low-latency baseline
+3. asset noise from missing Earth albedo tiles still pollutes profiling output and visual runs
+4. CPU upload and staging work should be revisited only if later low-latency baselines point back there
 
 ## Current Optimization Priority
 
-1. reduce CPU-side texture upload cost in `render.prepare.gpu_tile_atlas`
-2. add stronger tile request prioritization, hysteresis, and stale-load cancellation
-3. eliminate avoidable render and extract buffer rewrites and bind-group recreation
-4. add GPU timing or capture-backed attribution so future tuning targets measured passes, not guesses
+1. keep `MSAA_SAMPLES=1` as the canonical low-latency benchmark configuration and `MSAA_SAMPLES=4` as the quality-control comparison
+2. reduce terrain fragment-shading cost and other GPU-heavy render work before returning to streaming heuristics
+3. isolate terrain depth, main opaque pass, and remaining render-path overhead on the new low-latency baseline
+4. add stronger GPU timing or capture-backed attribution so future tuning targets measured passes, not guesses
 
 ## O1 Attribution Update
 
@@ -234,3 +234,68 @@ Action:
 - keep MSAA configurable in the benchmark harness
 - treat `MSAA_SAMPLES=1` as the low-latency benchmark configuration for future optimization work unless image-quality validation says otherwise
 - keep `MSAA_SAMPLES=4` as the quality-control comparison
+
+## O4 Isolation: Terrain Relief Shading Was The Dominant GPU-Side Lever
+
+The accepted `MSAA_SAMPLES=1` baseline changed the optimization picture enough that the old CPU upload hotspot stopped being the main latency lever.
+
+Rebaselined Swiss moving sweep (`warmup=3s`, `measure=6s`, `UPLOAD_BUDGET_MB=24`, `MSAA_SAMPLES=1`):
+- artifacts: `/tmp/terrain_bench_swiss_msaa1_rebaseline/summary.txt`
+- aggregate across 3 trials:
+  - FPS `61.19`
+  - frame mean `16.360 ms`
+  - p95 `26.650 ms`
+  - p99 `32.670 ms`
+
+Key per-trial observation:
+- the hottest measured CPU phase was still reported as `render.prepare.gpu_tile_atlas`
+- but its p95 was only about `0.52 ms`
+
+Interpretation:
+- on the accepted low-latency baseline, CPU upload work was no longer large enough to explain frame-wide latency
+- the next useful isolation had to move back to render-side GPU-sensitive work
+
+Controlled shader isolation on that same baseline:
+- default terrain lighting enabled:
+  - artifact: `/tmp/swiss_msaa1_default_iso.json`
+  - FPS `60.97`
+  - frame mean `16.402 ms`
+  - p95 `25.214 ms`
+- terrain lighting disabled:
+  - artifact: `/tmp/swiss_msaa1_unlit_iso.json`
+  - FPS `114.07`
+  - frame mean `8.766 ms`
+  - p95 `13.426 ms`
+
+Interpretation:
+- terrain fragment shading, not streaming, was the dominant GPU-side lever in the Swiss demo path
+- the example shader was using an expensive stochastic multi-light `relief_shading()` path
+
+Implemented fix:
+- simplified `relief_shading()` in `src/shaders/attachments.wgsl`
+- replaced the 4-sample pseudo-random lighting loop with a cheap single-direction direct term plus hemisphere fill
+- preserved lighting-on rendering rather than relying on an unlit fallback
+
+Post-fix Swiss moving sweep (`MSAA_SAMPLES=1`, lighting enabled):
+- artifact: `/tmp/swiss_msaa1_relief_fast.json`
+- capture: `/tmp/swiss_msaa1_relief_fast_captures/frame_000120.png`
+- capture validation:
+  - grayscale mean `55.07`
+  - grayscale stddev `17.24`
+- benchmark result:
+  - FPS `99.55`
+  - frame mean `10.045 ms`
+  - p95 `15.235 ms`
+  - p99 `19.088 ms`
+  - max `24.930 ms`
+
+Compared to the pre-fix lighting-on baseline:
+- FPS: `60.97 -> 99.55`
+- frame mean: `16.402 ms -> 10.045 ms`
+- p95: `25.214 ms -> 15.235 ms`
+- p99: `30.362 ms -> 19.088 ms`
+
+Current implication:
+- the main accepted low-latency path is now much closer to a genuinely snappy baseline
+- future optimization should start from this lighter terrain-shading path
+- the next likely targets are terrain depth work, remaining main-pass overhead, and better GPU attribution, not upload reordering

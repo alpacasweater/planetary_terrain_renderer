@@ -2,6 +2,7 @@ use bevy::app::AppExit;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 #[cfg(feature = "metal_capture")]
 use bevy::diagnostic::FrameCount;
+use bevy::render::RenderApp;
 use bevy::render::view::Msaa;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::shader::ShaderRef;
@@ -9,6 +10,7 @@ use bevy::time::Real;
 use bevy::window::{PresentMode, WindowResolution};
 use bevy::{math::DVec3, prelude::*, reflect::TypePath, render::render_resource::*};
 use big_space::prelude::{CellCoord, Grids};
+use bevy_terrain::debug::DebugTerrain;
 use bevy_terrain::math::{
     Coordinate,
     geodesy::{LlaHae, Ned, ecef_to_lla_hae, ned_to_ecef, unit_from_lat_lon_degrees},
@@ -47,6 +49,11 @@ const ENABLE_DEBUG_TOOLS_ENV: &str = "MULTIRES_ENABLE_DEBUG_TOOLS";
 const ENABLE_PERF_TITLE_ENV: &str = "MULTIRES_ENABLE_PERF_TITLE";
 const UPLOAD_BUDGET_MB_ENV: &str = "MULTIRES_UPLOAD_BUDGET_MB";
 const MSAA_SAMPLES_ENV: &str = "MULTIRES_MSAA_SAMPLES";
+const TERRAIN_LIGHTING_ENV: &str = "MULTIRES_TERRAIN_LIGHTING";
+const TERRAIN_MORPH_ENV: &str = "MULTIRES_TERRAIN_MORPH";
+const TERRAIN_BLEND_ENV: &str = "MULTIRES_TERRAIN_BLEND";
+const TERRAIN_SAMPLE_GRAD_ENV: &str = "MULTIRES_TERRAIN_SAMPLE_GRAD";
+const TERRAIN_HIGH_PRECISION_ENV: &str = "MULTIRES_TERRAIN_HIGH_PRECISION";
 const ENABLE_DRONE_ENV: &str = "MULTIRES_ENABLE_DRONE";
 const DRONE_AGL_ENV: &str = "MULTIRES_DRONE_AGL_M";
 const DRONE_RADIUS_ENV: &str = "MULTIRES_DRONE_ORBIT_RADIUS_M";
@@ -194,6 +201,11 @@ struct BenchmarkSummary {
     benchmark_sweep_deg: f64,
     benchmark_sweep_period_s: f64,
     drone_enabled: bool,
+    terrain_lighting_enabled: bool,
+    terrain_morph_enabled: bool,
+    terrain_blend_enabled: bool,
+    terrain_sample_grad_enabled: bool,
+    terrain_high_precision_enabled: bool,
     hottest_phase_name: String,
     hottest_phase_mean_ms: f64,
     hottest_phase_p95_ms: f64,
@@ -248,6 +260,7 @@ fn main() {
     let benchmark_mode = benchmark_mode_enabled();
     let debug_tools_enabled = env_bool(ENABLE_DEBUG_TOOLS_ENV, !benchmark_mode);
     let perf_title_enabled = env_bool(ENABLE_PERF_TITLE_ENV, !benchmark_mode);
+    let terrain_debug = terrain_debug_from_env();
     let upload_budget_mb = env_usize(UPLOAD_BUDGET_MB_ENV, 24);
     let upload_budget_bytes_per_frame = if upload_budget_mb == 0 {
         0
@@ -272,6 +285,8 @@ fn main() {
         TerrainMaterialPlugin::<CustomMaterial>::default(),
         FrameTimeDiagnosticsPlugin::default(),
     ));
+    app.insert_resource(terrain_debug.clone());
+    app.sub_app_mut(RenderApp).insert_resource(terrain_debug.clone());
 
     if debug_tools_enabled {
         app.add_plugins((TerrainDebugPlugin, TerrainPickingPlugin));
@@ -466,6 +481,18 @@ fn env_u32(name: &str, default: u32) -> u32 {
         .ok()
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(default)
+}
+
+fn terrain_debug_from_env() -> DebugTerrain {
+    let defaults = DebugTerrain::default();
+    DebugTerrain {
+        lighting: env_bool(TERRAIN_LIGHTING_ENV, defaults.lighting),
+        morph: env_bool(TERRAIN_MORPH_ENV, defaults.morph),
+        blend: env_bool(TERRAIN_BLEND_ENV, defaults.blend),
+        sample_grad: env_bool(TERRAIN_SAMPLE_GRAD_ENV, defaults.sample_grad),
+        high_precision: env_bool(TERRAIN_HIGH_PRECISION_ENV, defaults.high_precision),
+        ..defaults
+    }
 }
 
 fn sample_source_raster_wgs84(source_raster: &Path, lat_deg: f64, lon_deg: f64) -> Option<f32> {
@@ -1203,6 +1230,7 @@ fn compute_summary(
     ready_wait_s: f64,
     focus: Option<&CameraFocus>,
     mode: &RuntimeMode,
+    debug: &DebugTerrain,
     runtime: &BenchmarkRuntime,
     settings: &TerrainSettings,
     phase_timings: TerrainPerfSnapshot,
@@ -1312,6 +1340,11 @@ fn compute_summary(
         benchmark_sweep_deg,
         benchmark_sweep_period_s,
         drone_enabled: env_bool(ENABLE_DRONE_ENV, !benchmark_mode_enabled()),
+        terrain_lighting_enabled: debug.lighting,
+        terrain_morph_enabled: debug.morph,
+        terrain_blend_enabled: debug.blend,
+        terrain_sample_grad_enabled: debug.sample_grad,
+        terrain_high_precision_enabled: debug.high_precision,
         hottest_phase_name: hottest_phase
             .as_ref()
             .map(|phase| phase.name.clone())
@@ -1395,6 +1428,11 @@ fn write_benchmark_outputs(
             "  \"benchmark_sweep_deg\": {benchmark_sweep_deg:.3},\n",
             "  \"benchmark_sweep_period_s\": {benchmark_sweep_period_s:.3},\n",
             "  \"drone_enabled\": {drone_enabled},\n",
+            "  \"terrain_lighting_enabled\": {terrain_lighting_enabled},\n",
+            "  \"terrain_morph_enabled\": {terrain_morph_enabled},\n",
+            "  \"terrain_blend_enabled\": {terrain_blend_enabled},\n",
+            "  \"terrain_sample_grad_enabled\": {terrain_sample_grad_enabled},\n",
+            "  \"terrain_high_precision_enabled\": {terrain_high_precision_enabled},\n",
             "  \"hottest_phase_name\": \"{hottest_phase_name}\",\n",
             "  \"hottest_phase_mean_ms\": {hottest_phase_mean_ms:.6},\n",
             "  \"hottest_phase_p95_ms\": {hottest_phase_p95_ms:.6},\n",
@@ -1451,6 +1489,11 @@ fn write_benchmark_outputs(
         benchmark_sweep_deg = summary.benchmark_sweep_deg,
         benchmark_sweep_period_s = summary.benchmark_sweep_period_s,
         drone_enabled = summary.drone_enabled,
+        terrain_lighting_enabled = summary.terrain_lighting_enabled,
+        terrain_morph_enabled = summary.terrain_morph_enabled,
+        terrain_blend_enabled = summary.terrain_blend_enabled,
+        terrain_sample_grad_enabled = summary.terrain_sample_grad_enabled,
+        terrain_high_precision_enabled = summary.terrain_high_precision_enabled,
         hottest_phase_name = hottest_phase_name,
         hottest_phase_mean_ms = summary.hottest_phase_mean_ms,
         hottest_phase_p95_ms = summary.hottest_phase_p95_ms,
@@ -1486,7 +1529,7 @@ fn write_benchmark_outputs(
             "scenario_name,overlays,present_mode,focus_label,focus_lat_deg,focus_lon_deg,benchmark_mode,debug_tools_enabled,perf_title_enabled,warmup_s,duration_s,sample_count,",
             "ready_wait_s,",
             "ready_atlas_count,ready_loaded_atlas_count,ready_loaded_tile_total,",
-            "fps_mean,frame_ms_mean,frame_ms_min,frame_ms_p50,frame_ms_p90,frame_ms_p95,frame_ms_p99,frame_ms_max,frame_over_25ms_count,frame_over_33ms_count,frame_over_50ms_count,latency_estimate_ms,peak_rss_kib,msaa_samples,benchmark_sweep_deg,benchmark_sweep_period_s,drone_enabled,",
+            "fps_mean,frame_ms_mean,frame_ms_min,frame_ms_p50,frame_ms_p90,frame_ms_p95,frame_ms_p99,frame_ms_max,frame_over_25ms_count,frame_over_33ms_count,frame_over_50ms_count,latency_estimate_ms,peak_rss_kib,msaa_samples,benchmark_sweep_deg,benchmark_sweep_period_s,drone_enabled,terrain_lighting_enabled,terrain_morph_enabled,terrain_blend_enabled,terrain_sample_grad_enabled,terrain_high_precision_enabled,",
             "hottest_phase_name,hottest_phase_mean_ms,hottest_phase_p95_ms,hottest_phase_max_ms,",
             "upload_budget_bytes_per_frame,terrain_view_buffer_updates_total,tile_tree_buffer_updates_total,tile_tree_buffer_skipped_total,",
             "tile_requests_total,tile_releases_total,canceled_pending_attachment_loads_total,canceled_inflight_attachment_loads_total,",
@@ -1494,7 +1537,7 @@ fn write_benchmark_outputs(
             "peak_pending_attachment_queue,peak_inflight_attachment_loads,peak_upload_backlog_attachment_tiles,canceled_stale_upload_attachment_tiles_total\n",
             "\"{scenario_name}\",\"{overlays_csv}\",\"{present_mode}\",\"{focus_label}\",{focus_lat_deg:.6},{focus_lon_deg:.6},{benchmark_mode},{debug_tools_enabled},{perf_title_enabled},{warmup_s:.3},{duration_s:.3},{sample_count},{ready_wait_s:.3},",
             "{ready_atlas_count},{ready_loaded_atlas_count},{ready_loaded_tile_total},",
-            "{fps_mean:.6},{frame_ms_mean:.6},{frame_ms_min:.6},{frame_ms_p50:.6},{frame_ms_p90:.6},{frame_ms_p95:.6},{frame_ms_p99:.6},{frame_ms_max:.6},{frame_over_25ms_count},{frame_over_33ms_count},{frame_over_50ms_count},{latency_estimate_ms:.6},{peak_rss_kib},{msaa_samples},{benchmark_sweep_deg:.3},{benchmark_sweep_period_s:.3},{drone_enabled},\"{hottest_phase_name}\",{hottest_phase_mean_ms:.6},{hottest_phase_p95_ms:.6},{hottest_phase_max_ms:.6},",
+            "{fps_mean:.6},{frame_ms_mean:.6},{frame_ms_min:.6},{frame_ms_p50:.6},{frame_ms_p90:.6},{frame_ms_p95:.6},{frame_ms_p99:.6},{frame_ms_max:.6},{frame_over_25ms_count},{frame_over_33ms_count},{frame_over_50ms_count},{latency_estimate_ms:.6},{peak_rss_kib},{msaa_samples},{benchmark_sweep_deg:.3},{benchmark_sweep_period_s:.3},{drone_enabled},{terrain_lighting_enabled},{terrain_morph_enabled},{terrain_blend_enabled},{terrain_sample_grad_enabled},{terrain_high_precision_enabled},\"{hottest_phase_name}\",{hottest_phase_mean_ms:.6},{hottest_phase_p95_ms:.6},{hottest_phase_max_ms:.6},",
             "{upload_budget_bytes_per_frame},{terrain_view_buffer_updates_total},{tile_tree_buffer_updates_total},{tile_tree_buffer_skipped_total},",
             "{tile_requests_total},{tile_releases_total},{canceled_pending_attachment_loads_total},{canceled_inflight_attachment_loads_total},",
             "{finished_attachment_loads_total},{upload_enqueued_attachment_tiles_total},{upload_enqueued_bytes_total},{upload_deferred_attachment_tiles_total},",
@@ -1533,6 +1576,11 @@ fn write_benchmark_outputs(
         benchmark_sweep_deg = summary.benchmark_sweep_deg,
         benchmark_sweep_period_s = summary.benchmark_sweep_period_s,
         drone_enabled = summary.drone_enabled,
+        terrain_lighting_enabled = summary.terrain_lighting_enabled,
+        terrain_morph_enabled = summary.terrain_morph_enabled,
+        terrain_blend_enabled = summary.terrain_blend_enabled,
+        terrain_sample_grad_enabled = summary.terrain_sample_grad_enabled,
+        terrain_high_precision_enabled = summary.terrain_high_precision_enabled,
         hottest_phase_name = hottest_phase_name,
         hottest_phase_mean_ms = summary.hottest_phase_mean_ms,
         hottest_phase_p95_ms = summary.hottest_phase_p95_ms,
@@ -1570,6 +1618,7 @@ fn run_benchmark(
     config: Option<Res<BenchmarkConfig>>,
     focus: Option<Res<CameraFocus>>,
     mode: Res<RuntimeMode>,
+    debug: Res<DebugTerrain>,
     settings: Res<TerrainSettings>,
     perf_telemetry: Res<TerrainPerfTelemetry>,
     mut tile_trees: ResMut<TerrainViewComponents<TileTree>>,
@@ -1707,6 +1756,7 @@ fn run_benchmark(
         runtime.ready_wait_s,
         focus.as_deref(),
         &mode,
+        &debug,
         &runtime,
         &settings,
         perf_telemetry.snapshot(),

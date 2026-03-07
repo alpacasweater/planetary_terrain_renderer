@@ -18,7 +18,7 @@ Bring `planetary_terrain_renderer` to a state where it is:
 | Task | Agent focus | Skill | Branch suggestion | Depends on |
 |---|---|---|---|---|
 | O1 | Benchmark contract and GPU attribution hardening | `terrain-benchmark-profiler` | `codex/benchmark-profiler` | none |
-| O2 | Tile scheduling and backlog smoothing | `terrain-streaming-optimizer` | `codex/streaming-optimizer` | O1 |
+| O2 | Tile scheduling and backlog smoothing | `terrain-streaming-optimizer` | `codex/streaming-optimizer` | O1, O3 |
 | O3 | Render and extract churn reduction | `terrain-render-path-optimizer` | `codex/render-path-optimizer` | O1 |
 | O4 | Optimization safety verification | `terrain-release-verifier` | `codex/release-verifier` | O2, O3 |
 
@@ -26,9 +26,10 @@ Bring `planetary_terrain_renderer` to a state where it is:
 
 1. Execute O1 first. Do not start optimization until the benchmark contract, scenario labeling, and attribution path are stable.
 2. O1 is now materially complete: scenario labeling, capture validation, measurement-window resets, and CPU-side phase attribution are live.
-3. Launch O2 and O3 only after O1 has published the canonical scenario matrix and artifact format.
-4. Require every optimization agent to preserve the current correctness and capture-validation gates.
-5. Launch O4 only after O2-O3 have published before/after artifacts.
+3. Launch O3 first on the accepted low-latency baseline.
+4. Hold O2 behind O3 unless new low-latency measurements point back to streaming or upload pressure.
+5. Require every optimization agent to preserve the current correctness and capture-validation gates.
+6. Launch O4 only after O2-O3 have published before/after artifacts.
 
 ## Ownership Boundaries
 
@@ -81,18 +82,16 @@ Deliverables:
 - scheduling or residency changes
 - before/after benchmark table for `swiss`
 Acceptance:
-- `swiss` moving-sweep p95 improves toward `< 25 ms`
-- `swiss` moving-sweep p99 improves toward `< 33 ms`
+- `swiss` moving-sweep p95 improves when the benchmark evidence points to streaming or upload pressure
+- `swiss` moving-sweep p99 improves when the benchmark evidence points to streaming or upload pressure
 - no correctness metric regression
 Prompt:
 - Optimize the terrain streaming path in `planetary_terrain_renderer`. Focus on prioritization, hysteresis, cancellation, upload budgeting, and atlas residency. Do not change geodesy or dataset semantics.
 Current first target:
-- `render.prepare.gpu_tile_atlas.uploads` is the hottest measured CPU phase in the Swiss sweep
-- higher default upload budget (`24 MB/frame`) is the first validated tuning change
+- no longer the active first target on the accepted low-latency baseline
+- higher default upload budget (`24 MB/frame`) is still a validated tuning change
 - upload-priority reordering was tested and rejected on the Swiss heavy-overlay baseline
-- Metal capture plus short isolation runs showed MSAA is a first-order latency lever in the Swiss heavy-overlay scene
-- the terrain depth-copy path has been fixed to support both single-sample and multisampled views
-- next work should treat `MSAA_SAMPLES=1` as the low-latency benchmark configuration, keep `MSAA_SAMPLES=4` as the quality-control comparison, and then return to upload or staging changes only if the lower-MSAA baseline still points there
+- revisit this packet only if the `MSAA_SAMPLES=1` baseline or later GPU-attribution work points back to streaming or staging pressure
 
 ### O3: Render-Path Churn Reduction
 Skill: `terrain-render-path-optimizer`
@@ -105,8 +104,13 @@ Deliverables:
 Acceptance:
 - profile shows reduced `Queue::write_buffer*` or resource recreation on the hot path
 - benchmark p95 or p99 improves without visual regressions
+- render-side GPU-heavy work is isolated before deeper structural changes are made
 Prompt:
 - Optimize the render and extraction path in `planetary_terrain_renderer` using the existing CPU profile as a starting point. Focus on persistent bind groups, reduced full-buffer rewrites, and resource lifetime improvements. Keep benchmark captures validating rendered terrain.
+Current first target:
+- keep `MSAA_SAMPLES=1` as the low-latency benchmark baseline and `MSAA_SAMPLES=4` as the quality-control comparison
+- the simplified terrain `relief_shading()` path in `src/shaders/attachments.wgsl` is now the accepted baseline because it moved the Swiss sweep from about `60.97 FPS / 16.40 ms mean / 25.21 ms p95` to about `99.55 FPS / 10.05 ms mean / 15.23 ms p95`
+- next work should isolate terrain depth textures, terrain depth copy, and remaining main-opaque-pass cost rather than returning to upload heuristics prematurely
 
 ### O4: Integration And Merge Gate Verification
 Skill: `terrain-release-verifier`
@@ -126,15 +130,22 @@ Prompt:
 - direct renderer geodesy matches `small_world`
 - current Earth `lod_count = 5` build is close to the dataset floor in flat/coastal regions
 - rebuilt Swiss overlay is in the `~13-20 m` p95 class against its source raster in the local HGT-overlap strip
-- Swiss renderer benchmark baseline from the capture-validated sweep:
-  - FPS mean `44.89`
-  - frame mean `22.28 ms`
-  - p95 `36.52 ms`
-  - p99 `49.81 ms`
-  - max `195.47 ms`
+- Swiss renderer low-latency benchmark baseline from the capture-validated sweep:
+  - artifacts: `/tmp/swiss_msaa1_relief_fast.json`
+  - FPS mean `99.55`
+  - frame mean `10.05 ms`
+  - p95 `15.23 ms`
+  - p99 `19.09 ms`
+  - max `24.93 ms`
+- Swiss quality-control comparison:
+  - artifacts: `/tmp/terrain_bench_msaa4_isolation/summary.txt`
+  - FPS mean `36.86`
+  - frame mean `27.17 ms`
+  - p95 `43.91 ms`
+  - p99 `51.27 ms`
 
 ## Still Relevant Risks
 
 - missing true GPU pass attribution still means some optimization choices are guided by inference
-- the heaviest overlay case still has visible tail-latency headroom
+- the heaviest overlay case still needs a clear quality policy between the low-latency `MSAA_SAMPLES=1` baseline and the `MSAA_SAMPLES=4` comparison
 - local `small_world` coverage for mountainous truth work is still geographically narrow
