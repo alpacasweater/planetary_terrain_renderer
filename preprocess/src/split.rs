@@ -1,5 +1,5 @@
 use crate::{
-    dataset::{create_tile_dataset, FaceInfo, PreprocessContext},
+    dataset::{FaceInfo, PreprocessContext, create_tile_dataset},
     gdal_extension::{CountingProgressCallback, ProgressCallback, SharedReadOnlyDataset},
     result::{PreprocessError, PreprocessResult},
     stitch::stitch,
@@ -7,7 +7,7 @@ use crate::{
 use bevy_terrain::math::TileCoordinate;
 use gdal::raster::{Buffer, GdalType};
 use glam::IVec2;
-use itertools::{iproduct, Itertools};
+use itertools::{Itertools, iproduct};
 use num::NumCast;
 use rayon::prelude::*;
 use std::collections::HashMap;

@@ -142,7 +142,10 @@ pub fn orbital_camera_controller(
         MouseScrollUnit::Line => mouse_scroll.delta.y as f64,
         MouseScrollUnit::Pixel => mouse_scroll.delta.y as f64 / 40.0,
     };
-    let pinch_delta = pinch_gestures.read().map(|gesture| gesture.0 as f64).sum::<f64>();
+    let pinch_delta = pinch_gestures
+        .read()
+        .map(|gesture| gesture.0 as f64)
+        .sum::<f64>();
     let gesture_zoom_active = scroll_delta != 0.0 || pinch_delta != 0.0;
 
     let mut update_cursor_coords = true;

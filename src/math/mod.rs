@@ -2,6 +2,7 @@ use bevy::math::{DMat3, DVec2, IVec2};
 use std::mem;
 
 mod coordinate;
+pub mod geodesy;
 mod spheroid;
 mod surface_approximation;
 mod terrain_shape;

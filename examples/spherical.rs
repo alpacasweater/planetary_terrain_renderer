@@ -1,6 +1,6 @@
+use bevy::shader::ShaderRef;
 use bevy::window::WindowResolution;
 use bevy::{prelude::*, reflect::TypePath, render::render_resource::*};
-use bevy::shader::ShaderRef;
 use bevy_terrain::prelude::*;
 
 const RADIUS: f64 = 6371000.0;

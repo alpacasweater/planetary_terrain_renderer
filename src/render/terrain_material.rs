@@ -415,7 +415,10 @@ where
         app.sub_app_mut(RenderApp)
             .add_render_command::<TerrainItem, DrawTerrain>()
             .init_resource::<SpecializedRenderPipelines<TerrainRenderPipeline<M>>>()
-            .add_systems(Render, queue_terrain::<M>.in_set(RenderSystems::QueueMeshes));
+            .add_systems(
+                Render,
+                queue_terrain::<M>.in_set(RenderSystems::QueueMeshes),
+            );
     }
 
     fn finish(&self, app: &mut App) {

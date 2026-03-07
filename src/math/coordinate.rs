@@ -1,6 +1,7 @@
 use crate::math::{
     BLOCK_SIZE, FACE_MATRICES, FaceRotation, INVERSE_FACE_MATRICES, NEIGHBOUR_OFFSETS,
     NEIGHBOURING_FACES, SIGMA, TerrainShape,
+    geodesy::{lat_lon_degrees_from_unit, unit_from_lat_lon_degrees},
 };
 use bevy::{
     math::{DVec2, DVec3},
@@ -64,6 +65,14 @@ impl Coordinate {
         } else {
             DVec3::new(self.uv.x - 0.5, 0.0, self.uv.y - 0.5)
         }
+    }
+
+    pub fn from_lat_lon_degrees(lat_deg: f64, lon_deg: f64) -> Self {
+        Self::from_unit_position(unit_from_lat_lon_degrees(lat_deg, lon_deg), true)
+    }
+
+    pub fn lat_lon_degrees(self) -> (f64, f64) {
+        lat_lon_degrees_from_unit(self.unit_position(true))
     }
 
     /// Calculates the coordinate for for the unit position on the unit cube sphere.

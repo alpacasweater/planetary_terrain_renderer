@@ -78,6 +78,21 @@ pub struct TileAtlas {
 }
 
 impl TileAtlas {
+    pub fn loaded_tile_count(&self) -> usize {
+        self.tile_states
+            .values()
+            .filter(|tile| matches!(tile.state, LoadingState::Loaded))
+            .count()
+    }
+
+    pub fn active_tile_count(&self) -> usize {
+        self.tile_states.len()
+    }
+
+    pub fn existing_tile_count(&self) -> usize {
+        self.existing_tiles.len()
+    }
+
     /// Creates a new tile_tree from a terrain config.
     pub fn new(
         config: &TerrainConfig,
