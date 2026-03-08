@@ -1,28 +1,33 @@
 use bevy::app::AppExit;
-use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 #[cfg(feature = "metal_capture")]
 use bevy::diagnostic::FrameCount;
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+use bevy::input::ButtonInput;
 use bevy::render::RenderApp;
 use bevy::render::view::Msaa;
-use bevy::render::view::screenshot::{save_to_disk, Screenshot};
+use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::shader::ShaderRef;
 use bevy::time::Real;
 use bevy::window::{PresentMode, WindowResolution};
 use bevy::{math::DVec3, prelude::*, reflect::TypePath, render::render_resource::*};
-use big_space::prelude::{CellCoord, Grids};
 use bevy_terrain::debug::DebugTerrain;
+#[cfg(feature = "metal_capture")]
+use bevy_terrain::debug::{FrameCapture, MetalCapturePlugin};
 use bevy_terrain::math::{
     Coordinate,
-    geodesy::{LlaHae, Ned, ecef_to_lla_hae, ned_to_ecef, unit_from_lat_lon_degrees},
+    geodesy::{
+        LlaHae, Ned, ecef_to_lla_hae, ned_to_ecef, renderer_local_to_lla_hae,
+        unit_from_lat_lon_degrees,
+    },
 };
 use bevy_terrain::perf::{TerrainPerfSnapshot, TerrainPerfTelemetry};
 use bevy_terrain::prelude::*;
-#[cfg(feature = "metal_capture")]
-use bevy_terrain::debug::{FrameCapture, MetalCapturePlugin};
+use big_space::prelude::{CellCoord, Grids};
 use std::collections::VecDeque;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::{collections::HashMap, env};
 
 const RADIUS: f64 = 6371000.0;
@@ -46,6 +51,7 @@ const METAL_CAPTURE_FRAME_ENV: &str = "MULTIRES_METAL_CAPTURE_FRAME";
 #[cfg(feature = "metal_capture")]
 const METAL_CAPTURE_DIR_ENV: &str = "MULTIRES_METAL_CAPTURE_DIR";
 const ENABLE_DEBUG_TOOLS_ENV: &str = "MULTIRES_ENABLE_DEBUG_TOOLS";
+const ENABLE_CLICK_READOUT_ENV: &str = "MULTIRES_ENABLE_CLICK_READOUT";
 const ENABLE_PERF_TITLE_ENV: &str = "MULTIRES_ENABLE_PERF_TITLE";
 const UPLOAD_BUDGET_MB_ENV: &str = "MULTIRES_UPLOAD_BUDGET_MB";
 const MSAA_SAMPLES_ENV: &str = "MULTIRES_MSAA_SAMPLES";
@@ -61,6 +67,11 @@ const DRONE_PERIOD_ENV: &str = "MULTIRES_DRONE_PERIOD_SECONDS";
 const DRONE_SAMPLES_ENV: &str = "MULTIRES_DRONE_SAMPLES";
 const DRONE_SIZE_ENV: &str = "MULTIRES_DRONE_SIZE_M";
 const PERF_TITLE_PREFIX: &str = "SphericalMultires";
+const CLICK_READOUT_PROMPT: &str =
+    "Left click terrain to inspect latitude, longitude, and WGS84 HAE.";
+const CLICK_COPY_PROMPT: &str = "Press Cmd+C or Ctrl+C to copy the last clicked coordinates.";
+const CLICK_MARKER_RADIUS_M: f32 = 120.0;
+const CLICK_MARKER_OFFSET_M: f64 = 80.0;
 
 #[derive(Clone, Copy)]
 struct OverlayPreset {
@@ -135,7 +146,36 @@ struct DemoDroneOrbit {
 struct RuntimeMode {
     benchmark_mode: bool,
     debug_tools_enabled: bool,
+    click_readout_enabled: bool,
     perf_title_enabled: bool,
+}
+
+#[derive(Resource)]
+struct ClickReadoutState {
+    summary_line: String,
+    detail_line: String,
+    status_line: String,
+    clipboard_payload: Option<String>,
+}
+
+impl Default for ClickReadoutState {
+    fn default() -> Self {
+        Self {
+            summary_line: CLICK_READOUT_PROMPT.to_string(),
+            detail_line: "Renderer local XYZ will appear after a terrain click.".to_string(),
+            status_line: CLICK_COPY_PROMPT.to_string(),
+            clipboard_payload: None,
+        }
+    }
+}
+
+impl ClickReadoutState {
+    fn text(&self) -> String {
+        format!(
+            "{}\n{}\n{}",
+            self.summary_line, self.detail_line, self.status_line
+        )
+    }
 }
 
 #[cfg(feature = "metal_capture")]
@@ -235,6 +275,12 @@ struct PrimaryTerrainCamera;
 #[derive(Component)]
 struct DemoDrone;
 
+#[derive(Component)]
+struct ClickReadoutText;
+
+#[derive(Component)]
+struct ClickMarker;
+
 #[derive(ShaderType, Clone)]
 struct GradientInfo {
     mode: u32,
@@ -259,6 +305,7 @@ fn main() {
     let present_mode = present_mode_from_env();
     let benchmark_mode = benchmark_mode_enabled();
     let debug_tools_enabled = env_bool(ENABLE_DEBUG_TOOLS_ENV, !benchmark_mode);
+    let click_readout_enabled = env_bool(ENABLE_CLICK_READOUT_ENV, !benchmark_mode);
     let perf_title_enabled = env_bool(ENABLE_PERF_TITLE_ENV, !benchmark_mode);
     let terrain_debug = terrain_debug_from_env();
     let upload_budget_mb = env_usize(UPLOAD_BUDGET_MB_ENV, 24);
@@ -286,10 +333,14 @@ fn main() {
         FrameTimeDiagnosticsPlugin::default(),
     ));
     app.insert_resource(terrain_debug.clone());
-    app.sub_app_mut(RenderApp).insert_resource(terrain_debug.clone());
+    app.sub_app_mut(RenderApp)
+        .insert_resource(terrain_debug.clone());
 
     if debug_tools_enabled {
-        app.add_plugins((TerrainDebugPlugin, TerrainPickingPlugin));
+        app.add_plugins(TerrainDebugPlugin);
+    }
+    if debug_tools_enabled || click_readout_enabled {
+        app.add_plugins(TerrainPickingPlugin);
     }
     #[cfg(feature = "metal_capture")]
     if metal_capture_config_from_env().is_some() && !debug_tools_enabled {
@@ -300,23 +351,28 @@ fn main() {
         TerrainSettings::new(vec!["albedo"])
             .with_upload_budget_bytes_per_frame(upload_budget_bytes_per_frame),
     )
-        .insert_resource(RuntimeMode {
-            benchmark_mode,
-            debug_tools_enabled,
-            perf_title_enabled,
-        })
-        .insert_resource(PerfTitleState::default())
-        .init_resource::<LoadingImages>()
-        .add_systems(Startup, initialize)
-        .add_systems(
-            Update,
-            (
-                animate_benchmark_camera,
-                animate_demo_drone,
-                capture_benchmark_frames,
-                run_benchmark,
-            ),
-        );
+    .insert_resource(RuntimeMode {
+        benchmark_mode,
+        debug_tools_enabled,
+        click_readout_enabled,
+        perf_title_enabled,
+    })
+    .insert_resource(ClickReadoutState::default())
+    .insert_resource(PerfTitleState::default())
+    .init_resource::<LoadingImages>()
+    .add_systems(Startup, initialize)
+    .add_systems(
+        Update,
+        (
+            animate_benchmark_camera,
+            animate_demo_drone,
+            inspect_clicked_terrain_point,
+            copy_click_readout_to_clipboard,
+            update_click_readout_ui,
+            capture_benchmark_frames,
+            run_benchmark,
+        ),
+    );
     #[cfg(feature = "metal_capture")]
     if let Some(config) = metal_capture_config_from_env() {
         app.insert_resource(config)
@@ -330,8 +386,7 @@ fn main() {
         app.add_systems(Update, finish_loading_images_local);
     }
 
-    app
-        .run();
+    app.run();
 }
 
 fn asset_exists(asset_path: &str) -> bool {
@@ -644,7 +699,11 @@ fn benchmark_config_from_env() -> Option<BenchmarkConfig> {
 
 #[cfg(feature = "metal_capture")]
 fn metal_capture_config_from_env() -> Option<MetalCaptureConfig> {
-    let frame = env::var(METAL_CAPTURE_FRAME_ENV).ok()?.trim().parse().ok()?;
+    let frame = env::var(METAL_CAPTURE_FRAME_ENV)
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
     let output_dir = env::var(METAL_CAPTURE_DIR_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -744,6 +803,7 @@ fn initialize(
     mut commands: Commands,
     mut images: ResMut<LoadingImages>,
     asset_server: Res<AssetServer>,
+    click_readout: Res<ClickReadoutState>,
     mode: Res<RuntimeMode>,
     perf_telemetry: Res<TerrainPerfTelemetry>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -819,9 +879,10 @@ fn initialize(
 
     info!(
         target: "perf",
-        "runtime_mode benchmark_mode={} debug_tools_enabled={} perf_title_enabled={}",
+        "runtime_mode benchmark_mode={} debug_tools_enabled={} click_readout_enabled={} perf_title_enabled={}",
         mode.benchmark_mode,
         mode.debug_tools_enabled,
+        mode.click_readout_enabled,
         mode.perf_title_enabled
     );
 
@@ -837,6 +898,24 @@ fn initialize(
             brightness: 100.0,
             ..default()
         });
+    }
+
+    if mode.click_readout_enabled {
+        commands.spawn((
+            Text::new(click_readout.text()),
+            TextFont {
+                font_size: 16.0,
+                ..default()
+            },
+            TextColor(Color::WHITE),
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(12.0),
+                left: Val::Px(12.0),
+                ..default()
+            },
+            ClickReadoutText,
+        ));
     }
 
     let camera_transform = if let Some(preset) = focus_preset {
@@ -861,6 +940,17 @@ fn initialize(
         commands.insert_resource(drone_orbit);
     }
     let msaa_samples = env_u32(MSAA_SAMPLES_ENV, 4);
+    let click_marker_material = mode.click_readout_enabled.then(|| {
+        standard_materials.add(StandardMaterial {
+            base_color: Color::srgb(0.98, 0.92, 0.12),
+            emissive: LinearRgba::rgb(6.0, 5.2, 0.8),
+            unlit: true,
+            ..default()
+        })
+    });
+    let click_marker_mesh = mode
+        .click_readout_enabled
+        .then(|| meshes.add(Sphere::new(CLICK_MARKER_RADIUS_M).mesh().ico(5).unwrap()));
 
     let mut view = Entity::PLACEHOLDER;
     commands.spawn_big_space(Grid::default(), |root| {
@@ -873,6 +963,19 @@ fn initialize(
                 OrbitalCameraController::default(),
             ))
             .id();
+
+        if let (Some(click_marker_mesh), Some(click_marker_material)) =
+            (click_marker_mesh.as_ref(), click_marker_material.as_ref())
+        {
+            root.spawn_spatial((
+                CellCoord::default(),
+                Transform::from_translation(Vec3::ZERO),
+                Visibility::Hidden,
+                ClickMarker,
+                Mesh3d(click_marker_mesh.clone()),
+                MeshMaterial3d(click_marker_material.clone()),
+            ));
+        }
 
         if let Some(drone_orbit) = demo_drone_orbit.as_ref() {
             let grid = Grid::default();
@@ -1040,6 +1143,186 @@ fn animate_demo_drone(
         let (new_cell, new_translation) = grid.translation_to_grid(local_position);
         *cell = new_cell;
         transform.translation = new_translation;
+    }
+}
+
+fn inspect_clicked_terrain_point(
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    mode: Res<RuntimeMode>,
+    grids: Grids,
+    cameras: Query<(Entity, &PickingData), With<PrimaryTerrainCamera>>,
+    mut click_markers: Query<(&mut Transform, &mut CellCoord, &mut Visibility), With<ClickMarker>>,
+    mut click_readout: ResMut<ClickReadoutState>,
+) {
+    if !mode.click_readout_enabled || !mouse_buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+
+    match cameras.single() {
+        Ok((entity, picking_data)) => match (picking_data.translation, grids.parent_grid(entity)) {
+            (Some(hit_translation), Some(grid)) => {
+                let local_position = grid.grid_position_double(
+                    &picking_data.cell,
+                    &Transform::from_translation(hit_translation),
+                );
+                let marker_position =
+                    local_position + local_position.normalize_or_zero() * CLICK_MARKER_OFFSET_M;
+                let lla = renderer_local_to_lla_hae(local_position);
+
+                if let Ok((mut marker_transform, mut marker_cell, mut marker_visibility)) =
+                    click_markers.single_mut()
+                {
+                    let (new_cell, new_translation) = grid.translation_to_grid(marker_position);
+                    *marker_cell = new_cell;
+                    marker_transform.translation = new_translation;
+                    *marker_visibility = Visibility::Visible;
+                }
+
+                info!(
+                    target: "click",
+                    "terrain_click lat_deg={:.8} lon_deg={:.8} hae_m={:.3} local_x_m={:.3} local_y_m={:.3} local_z_m={:.3}",
+                    lla.lat_deg,
+                    lla.lon_deg,
+                    lla.hae_m,
+                    local_position.x,
+                    local_position.y,
+                    local_position.z
+                );
+
+                click_readout.summary_line = format!(
+                    "Lat {:.8} deg | Lon {:.8} deg | WGS84 HAE {:.3} m",
+                    lla.lat_deg, lla.lon_deg, lla.hae_m
+                );
+                click_readout.detail_line = format!(
+                    "Renderer local XYZ = ({:.3}, {:.3}, {:.3}) m",
+                    local_position.x, local_position.y, local_position.z
+                );
+                click_readout.status_line = CLICK_COPY_PROMPT.to_string();
+                click_readout.clipboard_payload = Some(format!(
+                    concat!(
+                        "lat_deg={:.8}\n",
+                        "lon_deg={:.8}\n",
+                        "wgs84_hae_m={:.3}\n",
+                        "renderer_local_x_m={:.3}\n",
+                        "renderer_local_y_m={:.3}\n",
+                        "renderer_local_z_m={:.3}\n"
+                    ),
+                    lla.lat_deg,
+                    lla.lon_deg,
+                    lla.hae_m,
+                    local_position.x,
+                    local_position.y,
+                    local_position.z
+                ));
+            }
+            (None, _) => {
+                if let Ok((_, _, mut marker_visibility)) = click_markers.single_mut() {
+                    *marker_visibility = Visibility::Hidden;
+                }
+                click_readout.summary_line = "No terrain hit under cursor.".to_string();
+                click_readout.detail_line =
+                    "Renderer local XYZ is only available for valid terrain hits.".to_string();
+                click_readout.status_line = CLICK_COPY_PROMPT.to_string();
+            }
+            (_, None) => {
+                if let Ok((_, _, mut marker_visibility)) = click_markers.single_mut() {
+                    *marker_visibility = Visibility::Hidden;
+                }
+                click_readout.summary_line =
+                    "No terrain grid available for click inspection.".to_string();
+                click_readout.detail_line =
+                    "Renderer local XYZ is only available for valid terrain hits.".to_string();
+                click_readout.status_line = CLICK_COPY_PROMPT.to_string();
+            }
+        },
+        Err(_) => {
+            if let Ok((_, _, mut marker_visibility)) = click_markers.single_mut() {
+                *marker_visibility = Visibility::Hidden;
+            }
+            click_readout.summary_line =
+                "No primary terrain camera available for click inspection.".to_string();
+            click_readout.detail_line =
+                "Renderer local XYZ is only available for valid terrain hits.".to_string();
+            click_readout.status_line = CLICK_COPY_PROMPT.to_string();
+        }
+    }
+}
+
+fn copy_click_readout_to_clipboard(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mode: Res<RuntimeMode>,
+    mut click_readout: ResMut<ClickReadoutState>,
+) {
+    if !mode.click_readout_enabled || !copy_shortcut_pressed(&keyboard) {
+        return;
+    }
+
+    let Some(payload) = click_readout.clipboard_payload.clone() else {
+        click_readout.status_line = "No clicked coordinates available to copy yet.".to_string();
+        return;
+    };
+
+    match copy_text_to_clipboard(&payload) {
+        Ok(()) => {
+            click_readout.status_line = "Copied last clicked coordinates to clipboard.".to_string();
+        }
+        Err(error) => {
+            click_readout.status_line = format!("Clipboard copy failed: {error}");
+            warn!(target: "click", "clipboard copy failed: {error}");
+        }
+    }
+}
+
+fn update_click_readout_ui(
+    mode: Res<RuntimeMode>,
+    click_readout: Res<ClickReadoutState>,
+    mut readout_text: Query<&mut Text, With<ClickReadoutText>>,
+) {
+    if !mode.click_readout_enabled || !click_readout.is_changed() {
+        return;
+    }
+
+    for mut text in &mut readout_text {
+        *text = Text::new(click_readout.text());
+    }
+}
+
+fn copy_shortcut_pressed(keyboard: &ButtonInput<KeyCode>) -> bool {
+    keyboard.just_pressed(KeyCode::KeyC)
+        && (keyboard.pressed(KeyCode::SuperLeft)
+            || keyboard.pressed(KeyCode::SuperRight)
+            || keyboard.pressed(KeyCode::ControlLeft)
+            || keyboard.pressed(KeyCode::ControlRight))
+}
+
+fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut child = Command::new("pbcopy")
+            .stdin(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("failed to spawn pbcopy: {error}"))?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "failed to open pbcopy stdin".to_string())?;
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|error| format!("failed to write pbcopy stdin: {error}"))?;
+        drop(stdin);
+        let status = child
+            .wait()
+            .map_err(|error| format!("failed to wait for pbcopy: {error}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("pbcopy exited with status {status}"))
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = text;
+        Err("clipboard copy is only implemented for macOS in this demo".to_string())
     }
 }
 
@@ -1253,9 +1536,18 @@ fn compute_summary(
     let frame_ms_p90 = compute_percentile(&sorted, 0.90);
     let frame_ms_p95 = compute_percentile(&sorted, 0.95);
     let frame_ms_p99 = compute_percentile(&sorted, 0.99);
-    let frame_over_25ms_count = samples_ms.iter().filter(|&&frame_ms| frame_ms > 25.0).count();
-    let frame_over_33ms_count = samples_ms.iter().filter(|&&frame_ms| frame_ms > 33.0).count();
-    let frame_over_50ms_count = samples_ms.iter().filter(|&&frame_ms| frame_ms > 50.0).count();
+    let frame_over_25ms_count = samples_ms
+        .iter()
+        .filter(|&&frame_ms| frame_ms > 25.0)
+        .count();
+    let frame_over_33ms_count = samples_ms
+        .iter()
+        .filter(|&&frame_ms| frame_ms > 33.0)
+        .count();
+    let frame_over_50ms_count = samples_ms
+        .iter()
+        .filter(|&&frame_ms| frame_ms > 50.0)
+        .count();
     let fps_mean = if frame_ms_mean > 0.0 {
         1000.0 / frame_ms_mean
     } else {
@@ -1349,9 +1641,18 @@ fn compute_summary(
             .as_ref()
             .map(|phase| phase.name.clone())
             .unwrap_or_else(|| "none".to_string()),
-        hottest_phase_mean_ms: hottest_phase.as_ref().map(|phase| phase.mean_ms).unwrap_or(0.0),
-        hottest_phase_p95_ms: hottest_phase.as_ref().map(|phase| phase.p95_ms).unwrap_or(0.0),
-        hottest_phase_max_ms: hottest_phase.as_ref().map(|phase| phase.max_ms).unwrap_or(0.0),
+        hottest_phase_mean_ms: hottest_phase
+            .as_ref()
+            .map(|phase| phase.mean_ms)
+            .unwrap_or(0.0),
+        hottest_phase_p95_ms: hottest_phase
+            .as_ref()
+            .map(|phase| phase.p95_ms)
+            .unwrap_or(0.0),
+        hottest_phase_max_ms: hottest_phase
+            .as_ref()
+            .map(|phase| phase.max_ms)
+            .unwrap_or(0.0),
         upload_budget_bytes_per_frame: settings.upload_budget_bytes_per_frame,
         phase_timings,
         terrain_view_buffer_updates_total: tile_tree_perf.terrain_view_buffer_updates_total,
@@ -1368,8 +1669,8 @@ fn compute_summary(
         peak_pending_attachment_queue: perf.peak_pending_attachment_queue,
         peak_inflight_attachment_loads: perf.peak_inflight_attachment_loads,
         peak_upload_backlog_attachment_tiles: perf.peak_upload_backlog_attachment_tiles,
-        canceled_stale_upload_attachment_tiles_total:
-            perf.canceled_stale_upload_attachment_tiles_total,
+        canceled_stale_upload_attachment_tiles_total: perf
+            .canceled_stale_upload_attachment_tiles_total,
     })
 }
 
@@ -1504,16 +1805,12 @@ fn write_benchmark_outputs(
         tile_tree_buffer_skipped_total = summary.tile_tree_buffer_skipped_total,
         tile_requests_total = summary.tile_requests_total,
         tile_releases_total = summary.tile_releases_total,
-        canceled_pending_attachment_loads_total =
-            summary.canceled_pending_attachment_loads_total,
-        canceled_inflight_attachment_loads_total =
-            summary.canceled_inflight_attachment_loads_total,
+        canceled_pending_attachment_loads_total = summary.canceled_pending_attachment_loads_total,
+        canceled_inflight_attachment_loads_total = summary.canceled_inflight_attachment_loads_total,
         finished_attachment_loads_total = summary.finished_attachment_loads_total,
-        upload_enqueued_attachment_tiles_total =
-            summary.upload_enqueued_attachment_tiles_total,
+        upload_enqueued_attachment_tiles_total = summary.upload_enqueued_attachment_tiles_total,
         upload_enqueued_bytes_total = summary.upload_enqueued_bytes_total,
-        upload_deferred_attachment_tiles_total =
-            summary.upload_deferred_attachment_tiles_total,
+        upload_deferred_attachment_tiles_total = summary.upload_deferred_attachment_tiles_total,
         peak_pending_attachment_queue = summary.peak_pending_attachment_queue,
         peak_inflight_attachment_loads = summary.peak_inflight_attachment_loads,
         peak_upload_backlog_attachment_tiles = summary.peak_upload_backlog_attachment_tiles,
@@ -1591,16 +1888,12 @@ fn write_benchmark_outputs(
         tile_tree_buffer_skipped_total = summary.tile_tree_buffer_skipped_total,
         tile_requests_total = summary.tile_requests_total,
         tile_releases_total = summary.tile_releases_total,
-        canceled_pending_attachment_loads_total =
-            summary.canceled_pending_attachment_loads_total,
-        canceled_inflight_attachment_loads_total =
-            summary.canceled_inflight_attachment_loads_total,
+        canceled_pending_attachment_loads_total = summary.canceled_pending_attachment_loads_total,
+        canceled_inflight_attachment_loads_total = summary.canceled_inflight_attachment_loads_total,
         finished_attachment_loads_total = summary.finished_attachment_loads_total,
-        upload_enqueued_attachment_tiles_total =
-            summary.upload_enqueued_attachment_tiles_total,
+        upload_enqueued_attachment_tiles_total = summary.upload_enqueued_attachment_tiles_total,
         upload_enqueued_bytes_total = summary.upload_enqueued_bytes_total,
-        upload_deferred_attachment_tiles_total =
-            summary.upload_deferred_attachment_tiles_total,
+        upload_deferred_attachment_tiles_total = summary.upload_deferred_attachment_tiles_total,
         peak_pending_attachment_queue = summary.peak_pending_attachment_queue,
         peak_inflight_attachment_loads = summary.peak_inflight_attachment_loads,
         peak_upload_backlog_attachment_tiles = summary.peak_upload_backlog_attachment_tiles,
@@ -1760,8 +2053,12 @@ fn run_benchmark(
         &runtime,
         &settings,
         perf_telemetry.snapshot(),
-        tile_trees.values().map(|tile_tree| tile_tree.perf_counters()),
-        tile_atlases.iter().map(|tile_atlas| tile_atlas.perf_counters()),
+        tile_trees
+            .values()
+            .map(|tile_tree| tile_tree.perf_counters()),
+        tile_atlases
+            .iter()
+            .map(|tile_atlas| tile_atlas.perf_counters()),
     ) {
         Some(summary) => summary,
         None => {

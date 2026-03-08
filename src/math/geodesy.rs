@@ -131,6 +131,11 @@ pub fn ecef_to_lla_hae(ecef: DVec3) -> LlaHae {
 }
 
 #[inline(always)]
+pub fn renderer_local_to_lla_hae(local: DVec3) -> LlaHae {
+    ecef_to_lla_hae(ecef_from_renderer_local(local))
+}
+
+#[inline(always)]
 pub fn ned_to_ecef(ned: Ned, origin: LlaHae) -> DVec3 {
     let cp = GeoConversionParams::from_origin(origin);
 
@@ -160,10 +165,10 @@ pub fn ecef_to_ned(ecef: DVec3, origin: LlaHae) -> Ned {
 mod tests {
     use super::{
         LlaHae, Ned, ecef_to_lla_hae, ecef_to_ned, lat_lon_degrees_from_unit, lla_hae_to_ecef,
-        ned_to_ecef, unit_from_lat_lon_degrees,
+        ned_to_ecef, renderer_local_to_lla_hae, unit_from_lat_lon_degrees,
     };
-    use bevy::math::DVec3;
     use crate::math::TerrainShape;
+    use bevy::math::DVec3;
     use small_world::wgs84::{AltType, Lla as SwLla, Ned as SwNed};
 
     fn normalize_lon(lon_deg: f64) -> f64 {
@@ -280,8 +285,8 @@ mod tests {
 
         for lla in cases {
             let renderer = lla_hae_to_ecef(lla);
-            let small_world = SwLla::new(lla.lat_deg, lla.lon_deg, lla.hae_m, AltType::Wgs84)
-                .to_ecef();
+            let small_world =
+                SwLla::new(lla.lat_deg, lla.lon_deg, lla.hae_m, AltType::Wgs84).to_ecef();
 
             assert!((renderer.x - small_world.x()).abs() < 1e-6);
             assert!((renderer.y - small_world.y()).abs() < 1e-6);
@@ -315,7 +320,10 @@ mod tests {
             let small_world = SwLla::from_ecef(ecef);
 
             assert!((renderer.lat_deg - small_world.lat_deg()).abs() < 1e-9);
-            assert!((normalize_lon(renderer.lon_deg) - normalize_lon(small_world.lon_deg())).abs() < 1e-9);
+            assert!(
+                (normalize_lon(renderer.lon_deg) - normalize_lon(small_world.lon_deg())).abs()
+                    < 1e-9
+            );
             assert!((renderer.hae_m - small_world.alt_m()).abs() < 1e-4);
         }
     }
@@ -418,6 +426,26 @@ mod tests {
     }
 
     #[test]
+    fn renderer_local_to_lla_hae_matches_small_world() {
+        let cases = [
+            (0.0, 0.0, 0.0),
+            (46.55, 10.6, 2920.0),
+            (25.7617, -80.1918, 110.0),
+            (-33.9, 151.2, 30.0),
+            (89.5, 179.0, 0.0),
+        ];
+
+        for (lat_deg, lon_deg, hae_m) in cases {
+            let local = renderer_local_from_small_world_lla(lat_deg, lon_deg, hae_m);
+            let lla = renderer_local_to_lla_hae(local);
+
+            assert!((lla.lat_deg - lat_deg).abs() < 1e-9);
+            assert!((normalize_lon(lla.lon_deg) - normalize_lon(lon_deg)).abs() < 1e-9);
+            assert!((lla.hae_m - hae_m).abs() < 1e-4);
+        }
+    }
+
+    #[test]
     fn small_world_ned_orbit_path_maps_to_renderer_local_positions() {
         let origins = [
             LlaHae {
@@ -470,12 +498,10 @@ mod tests {
                         direct_renderer_ecef.y,
                     );
 
-                    let path_error_m = (
-                        renderer_from_small_world_path - renderer_from_small_world_ecef
-                    )
-                    .length();
-                    let ned_error_m = (direct_renderer_local - renderer_from_small_world_ecef)
-                        .length();
+                    let path_error_m =
+                        (renderer_from_small_world_path - renderer_from_small_world_ecef).length();
+                    let ned_error_m =
+                        (direct_renderer_local - renderer_from_small_world_ecef).length();
 
                     assert!(
                         path_error_m < 1e-3,

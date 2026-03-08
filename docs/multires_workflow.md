@@ -148,6 +148,19 @@ Notes:
 - the drone orbit is precomputed from the Swiss source raster so the rendered path height is tied to the overlay DEM rather than an arbitrary offset
 - the cyan breadcrumb trail shows the orbit samples; the orange sphere is the live drone position
 
+Swiss click inspection demo:
+
+```bash
+MULTIRES_OVERLAYS=swiss \
+MULTIRES_ENABLE_CLICK_READOUT=1 \
+cargo run --example spherical_multires
+```
+
+Notes:
+- left click terrain to inspect the actual rendered hit point
+- the HUD reports `lat`, `lon`, `WGS84 HAE`, and renderer-local `XYZ`
+- `Cmd+C` or `Ctrl+C` copies the last clicked result to the clipboard
+
 ## 5. Visual Validation Tips
 
 - Press `L` for terrain data LOD view.

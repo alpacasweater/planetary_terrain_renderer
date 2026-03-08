@@ -45,6 +45,18 @@ MULTIRES_DRONE_ORBIT_RADIUS_M=1500 \
 cargo run --example spherical_multires
 ```
 
+Swiss click inspection demo:
+
+```bash
+MULTIRES_OVERLAYS=swiss \
+MULTIRES_ENABLE_CLICK_READOUT=1 \
+cargo run --example spherical_multires
+```
+
+Then:
+- left click terrain to inspect the rendered hit point
+- use `Cmd+C` or `Ctrl+C` to copy the last clicked result
+
 ## Current Status
 
 - `cargo check --workspace` and `cargo test --workspace` are green.
@@ -166,6 +178,8 @@ Important:
 Camera:
 - `T`: toggle fly camera
 - `R`: toggle orbital camera
+- left click terrain: inspect lat/lon/WGS84 HAE and renderer-local XYZ in the multires demo
+- `Cmd+C` or `Ctrl+C`: copy the last clicked terrain inspection result
 
 Visualization:
 - `L` terrain data LOD
