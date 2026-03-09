@@ -24,6 +24,7 @@ What this gives you:
 - the smallest copyable example in [examples/minimal_globe.rs](examples/minimal_globe.rs)
 - no GDAL setup unless you want to preprocess your own data
 - optional cache-first terrain reads when `TERRAIN_STREAMING_CACHE_ROOT` points at an asset-relative cache root such as `streaming_cache`
+- optional online imagery cache fill when `TERRAIN_STREAM_ONLINE=1`
 
 Other built-in demos:
 
@@ -71,6 +72,33 @@ It accepts an optional terrain root argument, so the same example works for both
 cargo run --example minimal_globe
 cargo run --example minimal_globe -- terrains/tutorial_earth
 TERRAIN_STREAMING_CACHE_ROOT=streaming_cache cargo run --example minimal_globe
+```
+
+## Optional Online Imagery Cache
+
+The renderer is local-first by default. If you opt in to online imagery, missing `albedo` tiles are fetched, written into a local cache, and reused on later offline runs.
+
+```bash
+TERRAIN_STREAM_ONLINE=1 cargo run --example minimal_globe
+```
+
+Default example behavior:
+- when `TERRAIN_STREAM_ONLINE=1` is set and `TERRAIN_STREAMING_CACHE_ROOT` is unset, the examples use `streaming_cache`
+- streamed tiles are written under `assets/streaming_cache/`
+- cache reads prefer `assets/streaming_cache/` and then fall back to the bundled starter Earth
+
+Current implementation limits:
+- imagery only; online height streaming is not implemented yet
+- the first provider is NASA GIBS `MODIS_Terra_CorrectedReflectance_TrueColor`
+- cache root must be asset-relative
+- antimeridian-crossing requests are not implemented yet, so the bundled starter data still matters near that boundary
+
+If you want a non-default cache location, keep it asset-relative:
+
+```bash
+TERRAIN_STREAM_ONLINE=1 \
+TERRAIN_STREAMING_CACHE_ROOT=my_cache \
+cargo run --example minimal_globe
 ```
 
 ## Cross-Platform Preprocessing Setup

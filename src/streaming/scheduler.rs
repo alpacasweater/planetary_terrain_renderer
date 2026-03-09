@@ -1,12 +1,19 @@
 use crate::{
-    streaming::source_contract::StreamingTileRequest,
+    plugin::TerrainSettings,
+    streaming::{
+        NasaGibsImageryProvider, StreamingProviderError, StreamingTileProvider,
+        cache_writer::{StreamingCacheWriteError, write_materialized_tile},
+        source_contract::StreamingTileRequest,
+    },
     terrain_data::{AttachmentLabel, TileAtlas},
 };
 use bevy::{
     platform::collections::{HashMap, HashSet},
     prelude::*,
+    tasks::{IoTaskPool, Task, poll_once},
 };
 use std::cmp::Reverse;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq, Resource)]
 pub struct TerrainStreamingSettings {
@@ -14,6 +21,7 @@ pub struct TerrainStreamingSettings {
     pub stream_imagery: bool,
     pub stream_height: bool,
     pub max_pending_requests: usize,
+    pub max_inflight_requests: usize,
 }
 
 impl Default for TerrainStreamingSettings {
@@ -23,6 +31,7 @@ impl Default for TerrainStreamingSettings {
             stream_imagery: true,
             stream_height: false,
             max_pending_requests: 1024,
+            max_inflight_requests: 4,
         }
     }
 }
@@ -34,6 +43,7 @@ impl TerrainStreamingSettings {
             stream_imagery: true,
             stream_height: false,
             max_pending_requests: 1024,
+            max_inflight_requests: 4,
         }
     }
 
@@ -43,11 +53,17 @@ impl TerrainStreamingSettings {
             stream_imagery: true,
             stream_height: true,
             max_pending_requests: 1024,
+            max_inflight_requests: 4,
         }
     }
 
     pub fn with_max_pending_requests(mut self, max_pending_requests: usize) -> Self {
         self.max_pending_requests = max_pending_requests;
+        self
+    }
+
+    pub fn with_max_inflight_requests(mut self, max_inflight_requests: usize) -> Self {
+        self.max_inflight_requests = max_inflight_requests;
         self
     }
 }
@@ -59,6 +75,8 @@ pub struct StreamingQueueStats {
     pub dropped_offline_total: u64,
     pub dropped_policy_total: u64,
     pub dropped_capacity_total: u64,
+    pub completed_total: u64,
+    pub failed_total: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -168,6 +186,14 @@ impl StreamingRequestQueue {
         self.inflight
             .remove(&StreamingRequestKey::from_request(request));
     }
+
+    pub fn note_completed(&mut self) {
+        self.stats.completed_total += 1;
+    }
+
+    pub fn note_failed(&mut self) {
+        self.stats.failed_total += 1;
+    }
 }
 
 fn streaming_allowed_for(
@@ -189,6 +215,141 @@ pub fn collect_streaming_requests(
     for mut atlas in &mut atlases {
         for request in atlas.drain_streaming_requests() {
             queue.enqueue(request, &settings);
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StreamingWorkerStats {
+    pub started_total: u64,
+    pub completed_total: u64,
+    pub failed_total: u64,
+    pub cache_writes_total: u64,
+}
+
+struct StreamingTaskResult {
+    request: StreamingTileRequest,
+    result: Result<PathBuf, StreamingTaskError>,
+}
+
+#[derive(Debug)]
+enum StreamingTaskError {
+    Provider(StreamingProviderError),
+    CacheWrite(StreamingCacheWriteError),
+    MissingCacheRoot,
+    UnsupportedAttachment(AttachmentLabel),
+}
+
+#[derive(Resource, Default)]
+pub struct StreamingWorker {
+    inflight: Vec<Task<StreamingTaskResult>>,
+    stats: StreamingWorkerStats,
+}
+
+impl StreamingWorker {
+    pub fn stats(&self) -> &StreamingWorkerStats {
+        &self.stats
+    }
+}
+
+pub fn start_streaming_jobs(
+    settings: Res<TerrainStreamingSettings>,
+    terrain_settings: Res<TerrainSettings>,
+    mut queue: ResMut<StreamingRequestQueue>,
+    mut worker: ResMut<StreamingWorker>,
+    gibs: Res<NasaGibsImageryProvider>,
+) {
+    let available_slots = settings
+        .max_inflight_requests
+        .saturating_sub(worker.inflight.len());
+    if available_slots == 0 {
+        return;
+    }
+
+    let cache_root = terrain_settings.streaming_cache_root.clone();
+    let gibs = gibs.clone();
+    let asset_root = PathBuf::from("assets");
+    let queued = queue.dequeue_batch(available_slots);
+
+    for queued_request in queued {
+        let request = queued_request.request;
+        let cache_root = cache_root.clone();
+        let gibs = gibs.clone();
+        let asset_root = asset_root.clone();
+        worker.stats.started_total += 1;
+
+        worker.inflight.push(IoTaskPool::get().spawn(async move {
+            let result = match request.attachment_label {
+                AttachmentLabel::Custom(ref name) if name == "albedo" => {
+                    match cache_root.map(PathBuf::from) {
+                        Some(cache_root) => match gibs.materialize_tile(&request) {
+                            Ok(tile) => write_materialized_tile(&asset_root, &cache_root, &tile)
+                                .map_err(StreamingTaskError::CacheWrite),
+                            Err(error) => Err(StreamingTaskError::Provider(error)),
+                        },
+                        None => Err(StreamingTaskError::MissingCacheRoot),
+                    }
+                }
+                _ => Err(StreamingTaskError::UnsupportedAttachment(
+                    request.attachment_label.clone(),
+                )),
+            };
+
+            StreamingTaskResult { request, result }
+        }));
+    }
+}
+
+pub fn finish_streaming_jobs(
+    mut queue: ResMut<StreamingRequestQueue>,
+    mut worker: ResMut<StreamingWorker>,
+) {
+    let mut remaining = Vec::with_capacity(worker.inflight.len());
+    for mut task in std::mem::take(&mut worker.inflight) {
+        if let Some(outcome) = bevy::tasks::block_on(poll_once(&mut task)) {
+            queue.finish(&outcome.request);
+            match outcome.result {
+                Ok(path) => {
+                    debug!(
+                        "Streamed {:?} {:?} into cache at {}",
+                        outcome.request.coordinate,
+                        outcome.request.attachment_label,
+                        path.display()
+                    );
+                    queue.note_completed();
+                    worker.stats.completed_total += 1;
+                    worker.stats.cache_writes_total += 1;
+                }
+                Err(error) => {
+                    warn!(
+                        "Streaming request failed for {:?} {:?}: {}",
+                        outcome.request.coordinate,
+                        outcome.request.attachment_label,
+                        describe_streaming_task_error(&error)
+                    );
+                    queue.note_failed();
+                    worker.stats.failed_total += 1;
+                }
+            }
+        } else {
+            remaining.push(task);
+        }
+    }
+    worker.inflight = remaining;
+}
+
+fn describe_streaming_task_error(error: &StreamingTaskError) -> String {
+    match error {
+        StreamingTaskError::Provider(error) => error.to_string(),
+        StreamingTaskError::CacheWrite(error) => error.to_string(),
+        StreamingTaskError::MissingCacheRoot => {
+            "streaming cache root is not configured".to_string()
+        }
+        StreamingTaskError::UnsupportedAttachment(label) => {
+            format!(
+                "no streaming provider is configured for attachment {:?}",
+                label
+            )
         }
     }
 }

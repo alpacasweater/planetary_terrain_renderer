@@ -410,6 +410,9 @@ fn terrain_settings_from_env(upload_budget_bytes_per_frame: usize) -> TerrainSet
         .with_upload_budget_bytes_per_frame(upload_budget_bytes_per_frame);
     match env::var(STREAMING_CACHE_ROOT_ENV) {
         Ok(root) if !root.trim().is_empty() => settings.with_streaming_cache_root(root),
+        _ if env_bool(STREAM_ONLINE_ENV, false) => {
+            settings.with_streaming_cache_root("streaming_cache")
+        }
         _ => settings,
     }
 }

@@ -41,6 +41,9 @@ fn terrain_settings_from_env() -> TerrainSettings {
     let settings = TerrainSettings::with_albedo();
     match env::var(STREAMING_CACHE_ROOT_ENV) {
         Ok(root) if !root.trim().is_empty() => settings.with_streaming_cache_root(root),
+        _ if env_var_enabled(STREAM_ONLINE_ENV) => {
+            settings.with_streaming_cache_root("streaming_cache")
+        }
         _ => settings,
     }
 }

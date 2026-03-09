@@ -8,7 +8,10 @@ use crate::{
         prepare_terrain_depth_textures, queue_tiling_prepass,
     },
     shaders::{InternalShaders, load_terrain_shaders},
-    streaming::{StreamingRequestQueue, TerrainStreamingSettings, collect_streaming_requests},
+    streaming::{
+        NasaGibsImageryProvider, StreamingRequestQueue, StreamingWorker, TerrainStreamingSettings,
+        collect_streaming_requests, finish_streaming_jobs, start_streaming_jobs,
+    },
     terrain::{TerrainComponents, TerrainConfig},
     terrain_data::{
         AttachmentLabel, GpuTileAtlas, TileAtlas, TileTree, finish_loading, start_loading,
@@ -109,8 +112,10 @@ impl Plugin for TerrainPlugin {
             .init_resource::<InternalShaders>()
             .init_resource::<TerrainViewComponents<TileTree>>()
             .init_resource::<TerrainSettings>()
+            .init_resource::<NasaGibsImageryProvider>()
             .init_resource::<TerrainStreamingSettings>()
             .init_resource::<StreamingRequestQueue>()
+            .init_resource::<StreamingWorker>()
             .init_asset_loader::<TiffLoader>()
             .add_systems(
                 PostUpdate,
@@ -122,6 +127,8 @@ impl Plugin for TerrainPlugin {
                         finish_loading,
                         TileAtlas::update,
                         collect_streaming_requests,
+                        finish_streaming_jobs,
+                        start_streaming_jobs,
                         start_loading,
                         TileTree::adjust_to_tile_atlas,
                         TileTree::generate_surface_approximation,

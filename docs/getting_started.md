@@ -18,6 +18,22 @@ This launches the smallest demo intended for copying into your own app.
 The source is [examples/minimal_globe.rs](../examples/minimal_globe.rs).
 If you later add a streamed cache, keep the same example and set `TERRAIN_STREAMING_CACHE_ROOT=streaming_cache` to prefer cached tiles before the bundled starter data.
 
+If you want the example to fill an imagery cache from the network, opt in explicitly:
+
+```bash
+TERRAIN_STREAM_ONLINE=1 cargo run --example minimal_globe
+```
+
+This keeps the runtime model simple:
+- bundled starter Earth renders immediately, even offline
+- missing `albedo` tiles can be fetched online and written under `assets/streaming_cache/`
+- later runs reuse the warmed cache before falling back to the bundled Earth
+
+Current online limits:
+- imagery only; online height refinement is not implemented yet
+- the current provider is NASA GIBS true-color imagery
+- requests that cross the antimeridian are not implemented yet
+
 ## 2. Preprocess a Dataset Without Downloading Anything
 
 The repo also includes tiny tutorial rasters in `sample_data/`.
@@ -141,4 +157,5 @@ Those larger source files are intentionally not committed.
 - If you only want a visible globe, do not start with the preprocess pipeline.
 - `cargo run --example minimal_globe` uses the bundled Earth by default. Pass a different terrain root as the first argument when you want to inspect another dataset.
 - `TERRAIN_STREAMING_CACHE_ROOT` must be asset-relative. Use `streaming_cache`, not an absolute filesystem path.
+- `TERRAIN_STREAM_ONLINE=1` is opt-in. Without it, the renderer never makes network requests.
 - The preprocess CLI currently forces `GDAL_NUM_THREADS=1`. That is intentional until the custom transformer is safely cloneable across GDAL worker threads.

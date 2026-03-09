@@ -3,6 +3,8 @@
 Cargo.lock
 target
 captures
+streaming_cache
+assets/streaming_cache
 assets/**/data/*
 assets/**/config.tc
 assets/terrains/*

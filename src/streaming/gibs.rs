@@ -1,16 +1,22 @@
 use crate::{
-    math::{Coordinate, TerrainShape, TileCoordinate},
+    math::{Coordinate, TerrainShape},
     streaming::{
-        StreamedAttachmentKind, StreamingProviderError, StreamingSourceAvailability,
-        StreamingSourceDescriptor, StreamingSourceKind, StreamingTileProvider,
-        StreamingTileRequest,
+        CacheTileEncoding, CachedTileMetadata, MaterializedStreamingTile, StreamedAttachmentKind,
+        StreamingProviderError, StreamingSourceAvailability, StreamingSourceDescriptor,
+        StreamingSourceKind, StreamingTileProvider, StreamingTileRequest,
     },
 };
-use bevy::math::DVec2;
+use bevy::{math::DVec2, prelude::Resource};
+use image::{DynamicImage, ImageFormat};
+use std::{
+    io::{Cursor, Read},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use tiff::encoder::{TiffEncoder, colortype};
 
 const DEFAULT_GIBS_WMS_ENDPOINT: &str = "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi";
 const DEFAULT_GIBS_TRUE_COLOR_LAYER: &str = "MODIS_Terra_CorrectedReflectance_TrueColor";
-const DEFAULT_GIBS_IMAGE_FORMAT: &str = "image/tiff";
+const DEFAULT_GIBS_IMAGE_FORMAT: &str = "image/png";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NasaGibsImageryConfig {
@@ -19,6 +25,8 @@ pub struct NasaGibsImageryConfig {
     pub layer: String,
     pub image_format: String,
     pub time: Option<String>,
+    pub connect_timeout: Duration,
+    pub read_timeout: Duration,
 }
 
 impl Default for NasaGibsImageryConfig {
@@ -29,6 +37,8 @@ impl Default for NasaGibsImageryConfig {
             layer: DEFAULT_GIBS_TRUE_COLOR_LAYER.to_string(),
             image_format: DEFAULT_GIBS_IMAGE_FORMAT.to_string(),
             time: None,
+            connect_timeout: Duration::from_secs(10),
+            read_timeout: Duration::from_secs(30),
         }
     }
 }
@@ -47,7 +57,12 @@ pub struct GibsGetMapRequest {
 impl GibsGetMapRequest {
     pub fn url(&self) -> String {
         let mut url = format!(
-            "{}?service=WMS&request=GetMap&version=1.1.1&layers={}&styles=&srs=EPSG:4326&bbox={:.10},{:.10},{:.10},{:.10}&width={}&height={}&format={}&transparent=FALSE",
+            concat!(
+                "{}?service=WMS&request=GetMap&version=1.1.1",
+                "&layers={}&styles=&srs=EPSG:4326",
+                "&bbox={:.10},{:.10},{:.10},{:.10}",
+                "&width={}&height={}&format={}&transparent=FALSE"
+            ),
             self.endpoint,
             self.layer,
             self.bbox_lon_lat[0],
@@ -68,7 +83,7 @@ impl GibsGetMapRequest {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Resource)]
 pub struct NasaGibsImageryProvider {
     config: NasaGibsImageryConfig,
 }
@@ -90,22 +105,8 @@ impl NasaGibsImageryProvider {
         &self,
         request: &StreamingTileRequest,
     ) -> Result<GibsGetMapRequest, StreamingProviderError> {
-        if request.attachment_kind() != StreamedAttachmentKind::Imagery {
-            return Err(StreamingProviderError::Unsupported(
-                "NASA GIBS only serves imagery attachments".to_string(),
-            ));
-        }
-
-        if !matches!(
-            request.terrain_shape,
-            TerrainShape::Sphere { .. } | TerrainShape::Spheroid { .. }
-        ) {
-            return Err(StreamingProviderError::Unsupported(
-                "NASA GIBS provider currently requires a spherical terrain".to_string(),
-            ));
-        }
-
-        let bbox_lon_lat = tile_lon_lat_bbox(request.coordinate)?;
+        validate_request(request)?;
+        let bbox_lon_lat = request_lon_lat_bbox(request)?;
 
         Ok(GibsGetMapRequest {
             endpoint: self.config.wms_endpoint.clone(),
@@ -145,34 +146,148 @@ impl StreamingTileProvider for NasaGibsImageryProvider {
     fn materialize_tile(
         &self,
         request: &StreamingTileRequest,
-    ) -> Result<crate::streaming::MaterializedStreamingTile, StreamingProviderError> {
-        let _ = self.plan_get_map(request)?;
-        Err(StreamingProviderError::Unsupported(
-            "NASA GIBS cache materialization is not implemented yet; this provider currently plans WMS requests only".to_string(),
-        ))
+    ) -> Result<MaterializedStreamingTile, StreamingProviderError> {
+        let planned = self.plan_get_map(request)?;
+        let url = planned.url();
+
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(self.config.connect_timeout)
+            .timeout_read(self.config.read_timeout)
+            .timeout_write(self.config.read_timeout)
+            .build();
+
+        let response = agent.get(&url).call().map_err(map_ureq_error)?;
+
+        let content_type = response
+            .header("content-type")
+            .map(|value| value.split(';').next().unwrap_or(value).trim().to_string())
+            .unwrap_or_else(|| planned.image_format.clone());
+
+        let mut body = Vec::new();
+        response
+            .into_reader()
+            .read_to_end(&mut body)
+            .map_err(|error| {
+                StreamingProviderError::Transient(format!("gibs read failed: {error}"))
+            })?;
+
+        let source_format = ImageFormat::from_mime_type(&content_type)
+            .or_else(|| ImageFormat::from_mime_type(&planned.image_format))
+            .ok_or_else(|| {
+                StreamingProviderError::Permanent(format!(
+                    "unsupported GIBS response content type '{content_type}'"
+                ))
+            })?;
+
+        let source_image =
+            image::load_from_memory_with_format(&body, source_format).map_err(|error| {
+                StreamingProviderError::Permanent(format!("gibs image decode failed: {error}"))
+            })?;
+
+        let target_rgb = remap_source_to_tile(&source_image, request, planned.bbox_lon_lat)?;
+        let encoded_tile = encode_rgb_tiff(
+            request.attachment_config.texture_size,
+            request.attachment_config.texture_size,
+            &target_rgb,
+        )?;
+        let fetch_time_ms = current_unix_ms();
+
+        Ok(MaterializedStreamingTile {
+            bytes: encoded_tile,
+            metadata: CachedTileMetadata {
+                format_version: crate::streaming::CURRENT_STREAMING_CACHE_FORMAT_VERSION,
+                terrain_path: request.terrain_path.clone(),
+                attachment_label: request.attachment_label.clone(),
+                coordinate: request.coordinate,
+                source: self.descriptor(),
+                fetched_at_unix_ms: fetch_time_ms,
+                expires_at_unix_ms: None,
+                source_zoom: None,
+                source_revision: self.config.time.clone(),
+                source_content_hash: None,
+                source_crs: Some("EPSG:4326".to_string()),
+                encoding: CacheTileEncoding::Tiff,
+            },
+        })
     }
 }
 
-fn tile_lon_lat_bbox(tile: TileCoordinate) -> Result<[f64; 4], StreamingProviderError> {
-    let tile_count = (1_u32 << tile.lod) as f64;
-    let tile_origin = tile.xy.as_dvec2() / tile_count;
-    let tile_size = DVec2::splat(1.0 / tile_count);
-    let sample_uvs = [
-        DVec2::new(0.0, 0.0),
-        DVec2::new(1.0, 0.0),
-        DVec2::new(0.0, 1.0),
-        DVec2::new(1.0, 1.0),
-        DVec2::new(0.5, 0.5),
-    ];
+fn validate_request(request: &StreamingTileRequest) -> Result<(), StreamingProviderError> {
+    if request.attachment_kind() != StreamedAttachmentKind::Imagery {
+        return Err(StreamingProviderError::Unsupported(
+            "NASA GIBS only serves imagery attachments".to_string(),
+        ));
+    }
 
-    let mut samples = sample_uvs
-        .into_iter()
-        .map(|offset| {
-            Coordinate::new(tile.face, tile_origin + offset * tile_size).lat_lon_degrees()
+    if !matches!(
+        request.terrain_shape,
+        TerrainShape::Sphere { .. } | TerrainShape::Spheroid { .. }
+    ) {
+        return Err(StreamingProviderError::Unsupported(
+            "NASA GIBS provider currently requires a spherical terrain".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn request_lon_lat_bbox(
+    request: &StreamingTileRequest,
+) -> Result<[f64; 4], StreamingProviderError> {
+    let samples = sample_request_lon_lat(
+        request,
+        &[
+            (0.0, 0.0),
+            (0.5, 0.0),
+            (1.0, 0.0),
+            (0.0, 0.5),
+            (0.5, 0.5),
+            (1.0, 0.5),
+            (0.0, 1.0),
+            (0.5, 1.0),
+            (1.0, 1.0),
+        ],
+    );
+
+    bounded_lon_lat_bbox(samples)
+}
+
+fn sample_request_lon_lat(
+    request: &StreamingTileRequest,
+    normalized_points: &[(f64, f64)],
+) -> Vec<(f64, f64)> {
+    let last_pixel = request.attachment_config.texture_size.saturating_sub(1) as f64;
+    normalized_points
+        .iter()
+        .map(|(u, v)| {
+            texture_sample_coordinate(request, u * last_pixel, v * last_pixel).lat_lon_degrees()
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
 
-    let center_lon = samples[4].1;
+fn texture_sample_coordinate(
+    request: &StreamingTileRequest,
+    pixel_x: f64,
+    pixel_y: f64,
+) -> Coordinate {
+    let center_size = request.attachment_config.center_size() as f64;
+    let border_size = request.attachment_config.border_size as f64;
+    let tile_count = (1_u32 << request.coordinate.lod) as f64;
+    let sample_uv = DVec2::new(
+        (request.coordinate.xy.x as f64 + ((pixel_x - border_size + 0.5) / center_size))
+            / tile_count,
+        (request.coordinate.xy.y as f64 + ((pixel_y - border_size + 0.5) / center_size))
+            / tile_count,
+    );
+    let raw = Coordinate::new(request.coordinate.face, sample_uv);
+    Coordinate::from_unit_position(
+        raw.unit_position(request.terrain_shape.is_spherical()),
+        request.terrain_shape.is_spherical(),
+    )
+}
+
+fn bounded_lon_lat_bbox(mut samples: Vec<(f64, f64)>) -> Result<[f64; 4], StreamingProviderError> {
+    let center_lon = samples[samples.len() / 2].1;
     for (_, lon_deg) in &mut samples {
         *lon_deg = normalize_lon_around(*lon_deg, center_lon);
     }
@@ -200,6 +315,119 @@ fn tile_lon_lat_bbox(tile: TileCoordinate) -> Result<[f64; 4], StreamingProvider
     ])
 }
 
+fn remap_source_to_tile(
+    source_image: &DynamicImage,
+    request: &StreamingTileRequest,
+    bbox_lon_lat: [f64; 4],
+) -> Result<Vec<u8>, StreamingProviderError> {
+    let source_image = source_image.to_rgb8();
+    let width = request.attachment_config.texture_size;
+    let height = request.attachment_config.texture_size;
+    let bbox_center_lon = 0.5 * (bbox_lon_lat[0] + bbox_lon_lat[2]);
+    let source_width = source_image.width();
+    let source_height = source_image.height();
+
+    if source_width == 0 || source_height == 0 {
+        return Err(StreamingProviderError::Permanent(
+            "gibs response image had zero dimensions".to_string(),
+        ));
+    }
+
+    let mut remapped = Vec::with_capacity((width * height * 3) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            let (lat_deg, lon_deg) =
+                texture_sample_coordinate(request, x as f64, y as f64).lat_lon_degrees();
+            let lon_deg = normalize_lon_around(lon_deg, bbox_center_lon);
+
+            let u = if (bbox_lon_lat[2] - bbox_lon_lat[0]).abs() < f64::EPSILON {
+                0.5
+            } else {
+                (lon_deg - bbox_lon_lat[0]) / (bbox_lon_lat[2] - bbox_lon_lat[0])
+            };
+            let v = if (bbox_lon_lat[3] - bbox_lon_lat[1]).abs() < f64::EPSILON {
+                0.5
+            } else {
+                (bbox_lon_lat[3] - lat_deg) / (bbox_lon_lat[3] - bbox_lon_lat[1])
+            };
+
+            let sample = bilinear_sample_rgb8(&source_image, u.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
+            remapped.extend_from_slice(&sample);
+        }
+    }
+
+    Ok(remapped)
+}
+
+fn bilinear_sample_rgb8(image: &image::RgbImage, u: f64, v: f64) -> [u8; 3] {
+    let width = image.width().saturating_sub(1) as f64;
+    let height = image.height().saturating_sub(1) as f64;
+    let sample_x = u * width;
+    let sample_y = v * height;
+
+    let x0 = sample_x.floor() as u32;
+    let y0 = sample_y.floor() as u32;
+    let x1 = (x0 + 1).min(image.width().saturating_sub(1));
+    let y1 = (y0 + 1).min(image.height().saturating_sub(1));
+    let tx = sample_x.fract();
+    let ty = sample_y.fract();
+
+    let top_left = image.get_pixel(x0, y0).0.map(f64::from);
+    let top_right = image.get_pixel(x1, y0).0.map(f64::from);
+    let bottom_left = image.get_pixel(x0, y1).0.map(f64::from);
+    let bottom_right = image.get_pixel(x1, y1).0.map(f64::from);
+
+    let mut output = [0_u8; 3];
+    for channel in 0..3 {
+        let top = top_left[channel] * (1.0 - tx) + top_right[channel] * tx;
+        let bottom = bottom_left[channel] * (1.0 - tx) + bottom_right[channel] * tx;
+        let value = top * (1.0 - ty) + bottom * ty;
+        output[channel] = value.round().clamp(0.0, 255.0) as u8;
+    }
+    output
+}
+
+fn encode_rgb_tiff(
+    width: u32,
+    height: u32,
+    rgb_bytes: &[u8],
+) -> Result<Vec<u8>, StreamingProviderError> {
+    let mut cursor = Cursor::new(Vec::new());
+    let mut encoder = TiffEncoder::new(&mut cursor).map_err(|error| {
+        StreamingProviderError::Permanent(format!("failed to create TIFF encoder: {error}"))
+    })?;
+    encoder
+        .write_image::<colortype::RGB8>(width, height, rgb_bytes)
+        .map_err(|error| {
+            StreamingProviderError::Permanent(format!("failed to encode TIFF tile: {error}"))
+        })?;
+    Ok(cursor.into_inner())
+}
+
+fn map_ureq_error(error: ureq::Error) -> StreamingProviderError {
+    match error {
+        ureq::Error::Status(code, response) => {
+            let status = format!("gibs returned HTTP {code} for {}", response.get_url());
+            if code == 429 || code >= 500 {
+                StreamingProviderError::Transient(status)
+            } else {
+                StreamingProviderError::Permanent(status)
+            }
+        }
+        ureq::Error::Transport(error) => StreamingProviderError::Transient(format!(
+            "gibs transport failed: {}",
+            error.message().unwrap_or("transport error without message")
+        )),
+    }
+}
+
+fn current_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 fn normalize_lon_around(lon_deg: f64, reference_deg: f64) -> f64 {
     let mut lon = lon_deg;
     while lon - reference_deg > 180.0 {
@@ -225,7 +453,7 @@ fn normalize_lon_to_180(lon_deg: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::{
-        math::TerrainShape,
+        math::{TerrainShape, TileCoordinate},
         terrain_data::{AttachmentConfig, AttachmentFormat, AttachmentLabel},
     };
     use bevy::math::IVec2;
@@ -252,9 +480,9 @@ mod tests {
         let provider = NasaGibsImageryProvider::default();
         let planned = provider
             .plan_get_map(&imagery_request(TileCoordinate::new(
+                0,
                 2,
-                1,
-                IVec2::new(0, 0),
+                IVec2::new(1, 1),
             )))
             .expect("mid-latitude tile should be plannable");
 
@@ -264,7 +492,7 @@ mod tests {
         assert!(url.contains("request=GetMap"));
         assert!(url.contains("version=1.1.1"));
         assert!(url.contains("layers=MODIS_Terra_CorrectedReflectance_TrueColor"));
-        assert!(url.contains("format=image/tiff"));
+        assert!(url.contains("format=image/png"));
         assert!(url.contains("srs=EPSG:4326"));
         assert!(url.contains("width=512"));
         assert!(url.contains("height=512"));
@@ -287,5 +515,14 @@ mod tests {
         assert!((normalize_lon_around(-179.0, 179.0) - 181.0).abs() < 1e-9);
         assert!((normalize_lon_around(179.0, -179.0) + 181.0).abs() < 1e-9);
         assert!((normalize_lon_to_180(181.0) + 179.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn texture_sample_coordinate_handles_border_pixels() {
+        let request = imagery_request(TileCoordinate::new(2, 2, IVec2::new(1, 1)));
+        let coordinate = texture_sample_coordinate(&request, 0.0, 0.0);
+        let (lat_deg, lon_deg) = coordinate.lat_lon_degrees();
+        assert!(lat_deg.is_finite());
+        assert!(lon_deg.is_finite());
     }
 }

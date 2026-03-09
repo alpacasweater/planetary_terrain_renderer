@@ -34,6 +34,8 @@ strum = "0.27.1"
 strum_macros = "0.27.1"
 ron = "0.8"
 libc = "0.2"
+image = { version = "0.25.9", default-features = false, features = ["jpeg", "png", "tiff"] }
+ureq = "2.12.1"
 
 rand = { version = "0.9.0", optional = true }
 metal = { version = "0.32.0", optional = true } # keep in sync with wgpu-hal used for capture
