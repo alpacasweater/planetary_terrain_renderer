@@ -46,12 +46,17 @@ impl Default for TerrainSettings {
 }
 
 impl TerrainSettings {
-    pub fn new(custom_attachments: Vec<&str>) -> Self {
+    /// Create settings with height plus any custom attachments you want the renderer to stream.
+    pub fn new<I, S>(custom_attachments: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         let mut attachments = vec![AttachmentLabel::Height];
         attachments.extend(
             custom_attachments
                 .into_iter()
-                .map(|name| AttachmentLabel::Custom(name.to_string())),
+                .map(|name| AttachmentLabel::Custom(name.as_ref().to_string())),
         );
 
         Self {
@@ -61,7 +66,20 @@ impl TerrainSettings {
         }
     }
 
-    pub fn with_upload_budget_bytes_per_frame(mut self, upload_budget_bytes_per_frame: usize) -> Self {
+    /// Stream height plus a single custom attachment.
+    pub fn with_attachment<S: AsRef<str>>(attachment: S) -> Self {
+        Self::new([attachment.as_ref()])
+    }
+
+    /// Stream height plus the conventional `albedo` attachment.
+    pub fn with_albedo() -> Self {
+        Self::with_attachment("albedo")
+    }
+
+    pub fn with_upload_budget_bytes_per_frame(
+        mut self,
+        upload_budget_bytes_per_frame: usize,
+    ) -> Self {
         self.upload_budget_bytes_per_frame = upload_budget_bytes_per_frame;
         self
     }

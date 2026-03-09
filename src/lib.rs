@@ -5,6 +5,16 @@
 //! # Background
 //! There are three critical questions that each terrain renderer has to solve:
 //!
+//! # Getting Started
+//! If you want to render something immediately, run the bundled starter example:
+//! `cargo run --example minimal_globe`
+//!
+//! If you want to preprocess your own data, start with the committed tutorial rasters:
+//! `cargo run -p bevy_terrain_preprocess --example preprocess_tutorial_earth`
+//!
+//! The smallest example intended for copying into another Bevy app is
+//! `examples/minimal_globe.rs`.
+//!
 //! ## How to store, manage and access the terrain data?
 //! Each terrain has different types of textures associated with it.
 //! For example a simple one might only need height and albedo information.
@@ -52,6 +62,7 @@ pub mod plugin;
 pub mod preprocess;
 pub mod render;
 pub mod shaders;
+pub mod simple;
 pub mod spawn;
 pub mod terrain;
 pub mod terrain_data;
@@ -72,6 +83,7 @@ pub mod prelude {
         plugin::{TerrainPlugin, TerrainSettings},
         // preprocess::{PreprocessDataset, Preprocessor, SphericalDataset, TerrainPreprocessPlugin},
         render::TerrainMaterialPlugin,
+        simple::{SimpleTerrainMaterial, SimpleTerrainMaterialPlugin},
         spawn::SpawnTerrainCommandsExt,
         terrain::TerrainConfig,
         terrain_data::{

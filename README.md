@@ -1,11 +1,10 @@
 # Planetary Terrain Renderer
 
 A Bevy-based planetary terrain renderer with:
-- global base terrain plus local high-resolution overlays
+- planetary base terrain plus optional high-resolution overlays
 - large-world precision support
-- preprocessing pipeline for georeferenced rasters
-- benchmark and visual-capture tooling
-- physical-truth evaluation against `small_world`
+- a GDAL-based preprocessing pipeline for georeferenced rasters
+- benchmark and correctness tooling for validation work
 
 Project origin:
 - [bevy_terrain](https://github.com/kurtkuehnert/bevy_terrain)
@@ -13,64 +12,75 @@ Project origin:
 
 ## Quick Start
 
-A low-resolution Earth starter dataset is included in the repo.
+If you only want to see the renderer working, no extra downloads or native GIS dependencies are required.
 
-Run the globe demo:
+```bash
+cargo run --example minimal_globe
+```
+
+What this gives you:
+- a bundled low-resolution Earth under `assets/terrains/earth`
+- height plus albedo out of the box
+- the smallest copyable example in [examples/minimal_globe.rs](examples/minimal_globe.rs)
+- no GDAL setup unless you want to preprocess your own data
+
+Other built-in demos:
 
 ```bash
 cargo run --example spherical
-```
-
-Optional base-only multi-resolution demo:
-
-```bash
 MULTIRES_OVERLAYS=none cargo run --example spherical_multires
 ```
 
+## Build Your First Dataset
+
+The simplest preprocess tutorial uses committed sample rasters in `sample_data/`.
+
+1. Install GDAL for preprocessing.
+   Use the cross-platform steps in [Getting Started](docs/getting_started.md).
+2. Build the tutorial terrain.
+
+```bash
+cargo run -p bevy_terrain_preprocess --example preprocess_tutorial_earth
+```
+
+3. Render the generated dataset with the same minimal example.
+
+```bash
+cargo run --example minimal_globe -- terrains/tutorial_earth
+```
+
 Notes:
-- the starter Earth lives under `assets/terrains/earth` and includes both height and albedo
-- it is intentionally low resolution so a clean clone stays small and the examples start immediately
-- `./scripts/setup_earth_quickstart.sh` rebuilds a starter-sized Earth locally and adds albedo when `source_data/true_marble.tif` is available
-- for the larger validated Earth build and regional overlays, use [Multi-resolution workflow](docs/multires_workflow.md)
+- the render-only path does not require GDAL
+- the tutorial preprocess path does not require downloading any raster data
+- the full local-source example lives in [preprocess/examples/preprocess_earth.rs](preprocess/examples/preprocess_earth.rs)
 
-Once you have built additional overlay datasets, you can load them in the multi-resolution demo:
+## Minimal API
 
-```bash
-MULTIRES_OVERLAYS=swiss,los cargo run --example spherical_multires
-```
+The beginner-friendly surface is intentionally small:
+- `TerrainPlugin`: core terrain runtime
+- `SimpleTerrainMaterialPlugin`: built-in gradient/albedo material
+- `TerrainSettings::with_albedo()`: one-line attachment setup for the common case
+- `SimpleTerrainMaterial::for_terrain(...)`: automatically use albedo when present, otherwise fall back to height coloring
+- `commands.spawn_terrain(...)`: spawn the terrain once you have a view entity
 
-Swiss drone demo:
-
-```bash
-MULTIRES_OVERLAYS=swiss \
-MULTIRES_ENABLE_DRONE=1 \
-MULTIRES_DRONE_AGL_M=250 \
-MULTIRES_DRONE_ORBIT_RADIUS_M=1500 \
-cargo run --example spherical_multires
-```
-
-Swiss click inspection demo:
+The example to copy is [examples/minimal_globe.rs](examples/minimal_globe.rs).
+It accepts an optional terrain root argument, so the same example works for both bundled and freshly preprocessed data:
 
 ```bash
-MULTIRES_OVERLAYS=swiss \
-MULTIRES_ENABLE_CLICK_READOUT=1 \
-cargo run --example spherical_multires
+cargo run --example minimal_globe
+cargo run --example minimal_globe -- terrains/tutorial_earth
 ```
 
-## Current Status
+## Cross-Platform Preprocessing Setup
 
-- `cargo check --workspace` and `cargo test --workspace` are green.
-- Renderer-native WGS84 and local-frame transforms now agree with `small_world`.
-- Base Earth height parity is materially improved with `lod_count = 5`.
-- The rebuilt Swiss overlay is physically credible against its source DEM and supports the drone demo.
-- Current validated Swiss low-latency benchmark baseline is about `103.76 FPS`, `9.64 ms` mean frame time, `14.39 ms` p95, and `17.31 ms` p99.
-- The main open work is performance: remaining GPU/pass attribution, terrain depth-copy or main-pass cost on the low-latency baseline, and cleanup of noisy missing-asset paths. The old CPU upload hotspot is no longer the primary accepted target on the `MSAA=1` Swiss benchmark path.
+Preprocessing is the only part of the project that needs native GIS dependencies.
+The recommended setup is documented in [Getting Started](docs/getting_started.md):
+- Windows, Linux, and macOS instructions
+- a recommended Miniforge/conda-forge path
+- the `GDAL_HOME` note for Windows
+- zero-download tutorial preprocessing with `sample_data/`
 
-## Data and Preprocessing
-
-Use the preprocess CLI (or `preprocess/examples`) to convert GeoTIFF inputs into renderer assets under `assets/terrains/*`.
-
-Primary workflow docs:
+Additional workflow docs:
 - [Multi-resolution workflow](docs/multires_workflow.md)
 - [Saxony dataset workflow](docs/saxony_workflow.md)
 
@@ -105,7 +115,7 @@ Benchmark runner:
 ./scripts/benchmark_spherical_multires.sh
 ```
 
-Detailed benchmark usage and env vars:
+Details:
 - [Performance benchmarking](docs/performance_benchmarking.md)
 - [Performance findings (2026-03-07)](docs/performance_findings_2026-03-07.md)
 
@@ -173,7 +183,7 @@ Important:
 - the current local `small_world` HGT coverage only overlaps the eastern strip of `swiss.tif`, so the automated Swiss overlay vs `small_world` matrix is intentionally limited to that overlap
 - the preprocess CLI currently forces `GDAL_NUM_THREADS=1` because the custom transformer is not yet safely cloneable across GDAL worker threads
 
-## Controls (Debug)
+## Controls
 
 Camera:
 - `T`: toggle fly camera
@@ -182,19 +192,26 @@ Camera:
 - `Cmd+C` or `Ctrl+C`: copy the last clicked terrain inspection result
 
 Visualization:
-- `L` terrain data LOD
-- `Y` geometry LOD
-- `Q` tile tree
-- `W` wireframe
+- `L`: terrain data LOD
+- `Y`: geometry LOD
+- `Q`: tile tree
+- `W`: wireframe
 
 Quality toggles:
-- `M` morphing
-- `K` blending
-- `S` lighting
-- `H` high-precision coordinates
+- `M`: morphing
+- `K`: blending
+- `S`: lighting
+- `H`: high-precision coordinates
 
 GPU capture (macOS, `metal_capture` feature):
 - `C`: capture a frame (`captures/*.gputrace`)
+
+## Current Status
+
+- `cargo check --workspace` and `cargo test --workspace` are green.
+- Renderer-native WGS84 and local-frame transforms now agree with `small_world`.
+- Base Earth height parity is materially improved with `lod_count = 5`.
+- The rebuilt Swiss overlay is physically credible against its source DEM and supports the drone demo.
 
 ## Current Plans
 

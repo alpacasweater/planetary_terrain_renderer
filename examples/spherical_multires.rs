@@ -8,10 +8,9 @@ use bevy::input::ButtonInput;
 use bevy::render::RenderApp;
 use bevy::render::view::Msaa;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
-use bevy::shader::ShaderRef;
 use bevy::time::Real;
 use bevy::window::{PresentMode, WindowResolution};
-use bevy::{math::DVec3, prelude::*, reflect::TypePath, render::render_resource::*};
+use bevy::{math::DVec3, prelude::*};
 use bevy_terrain::debug::DebugTerrain;
 #[cfg(feature = "metal_capture")]
 use bevy_terrain::debug::{FrameCapture, MetalCapturePlugin};
@@ -301,26 +300,6 @@ struct ClickReadoutText;
 #[derive(Component)]
 struct ClickMarker;
 
-#[derive(ShaderType, Clone)]
-struct GradientInfo {
-    mode: u32,
-}
-
-#[derive(Asset, AsBindGroup, TypePath, Clone)]
-pub struct CustomMaterial {
-    #[texture(0)]
-    #[sampler(1)]
-    gradient: Handle<Image>,
-    #[uniform(2)]
-    gradient_info: GradientInfo,
-}
-
-impl Material for CustomMaterial {
-    fn fragment_shader() -> ShaderRef {
-        "shaders/spherical.wgsl".into()
-    }
-}
-
 fn main() {
     let present_mode = present_mode_from_env();
     let benchmark_mode = benchmark_mode_enabled();
@@ -349,7 +328,7 @@ fn main() {
             .build()
             .disable::<TransformPlugin>(),
         TerrainPlugin,
-        TerrainMaterialPlugin::<CustomMaterial>::default(),
+        SimpleTerrainMaterialPlugin,
         FrameTimeDiagnosticsPlugin::default(),
     ));
     app.insert_resource(terrain_debug.clone());
@@ -368,7 +347,7 @@ fn main() {
     }
 
     app.insert_resource(
-        TerrainSettings::new(vec!["albedo"])
+        TerrainSettings::with_albedo()
             .with_upload_budget_bytes_per_frame(upload_budget_bytes_per_frame),
     )
     .insert_resource(RuntimeMode {

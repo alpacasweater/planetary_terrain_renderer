@@ -447,13 +447,6 @@ pub fn initialize(
         commands.insert_resource(config);
     }
 
-    let gradient = asset_server.load("textures/gradient1.png");
-    images.load_image(
-        &gradient,
-        TextureDimension::D2,
-        TextureFormat::Rgba8UnormSrgb,
-    );
-
     let focus_preset = selected_keys
         .iter()
         .find_map(|key| overlay_map.get(key.as_str()).copied())
@@ -634,25 +627,14 @@ pub fn initialize(
     });
 
     if super::asset_exists(BASE_TERRAIN_CONFIG) {
-        let base_gradient_mode = if super::asset_dir_exists("terrains/earth/albedo") {
-            2
-        } else {
-            0
-        };
-
-        if base_gradient_mode == 0 {
+        if !super::asset_dir_exists("terrains/earth/albedo") {
             info!("Base Earth albedo not found; using height-gradient coloring.");
         }
 
         commands.spawn_terrain(
             asset_server.load(BASE_TERRAIN_CONFIG),
             TerrainViewConfig::default(),
-            CustomMaterial {
-                gradient: gradient.clone(),
-                gradient_info: GradientInfo {
-                    mode: base_gradient_mode,
-                },
-            },
+            SimpleTerrainMaterial::for_terrain(&asset_server, &mut images, "terrains/earth"),
             view,
         );
     } else {
@@ -683,10 +665,7 @@ pub fn initialize(
                 order: 1,
                 ..default()
             },
-            CustomMaterial {
-                gradient: gradient.clone(),
-                gradient_info: GradientInfo { mode: 0 },
-            },
+            SimpleTerrainMaterial::height_gradient(&asset_server, &mut images),
             view,
         );
         loaded_overlays += 1;

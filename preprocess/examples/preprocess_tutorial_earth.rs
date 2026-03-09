@@ -1,16 +1,15 @@
-//! Build the starter Earth dataset from local full-resolution source rasters.
+//! Build a tiny tutorial Earth dataset from committed sample rasters.
 //!
-//! Expected inputs:
-//! - `source_data/gebco_earth.tif`
-//! - `source_data/true_marble.tif`
+//! This example is the intended first preprocess run for new users because it
+//! requires no external downloads once GDAL is installed.
 
 use bevy_terrain::prelude::*;
 use bevy_terrain_preprocess::prelude::*;
 use gdal::raster::GdalDataType;
 
-const TERRAIN_PATH: &str = "assets/terrains/earth";
-const HEIGHT_SOURCE: &str = "source_data/gebco_earth.tif";
-const ALBEDO_SOURCE: &str = "source_data/true_marble.tif";
+const TERRAIN_PATH: &str = "assets/terrains/tutorial_earth";
+const HEIGHT_SOURCE: &str = "sample_data/gebco_earth_mini.tif";
+const ALBEDO_SOURCE: &str = "sample_data/true_marble_mini.tif";
 
 fn main() {
     preprocess_attachment(Cli {

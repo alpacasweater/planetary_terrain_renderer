@@ -1,0 +1,82 @@
+name: Quickstart
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  render-examples:
+    name: Render Examples (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check render crate
+        run: cargo check -p bevy_terrain
+
+      - name: Check beginner render examples
+        run: cargo check -p bevy_terrain --example minimal_globe --example spherical --example spherical_multires
+
+  preprocess-tutorial:
+    name: Preprocess Tutorial (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            conda_packages: "gdal pkg-config"
+          - os: macos-latest
+            conda_packages: "gdal pkg-config"
+          - os: windows-latest
+            conda_packages: "gdal"
+
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Miniforge
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: terrain-preprocess
+          channels: conda-forge
+          channel-priority: strict
+          conda-remove-defaults: "true"
+
+      - name: Install GDAL
+        run: conda install -y ${{ matrix.conda_packages }}
+
+      - name: Set Windows GDAL_HOME
+        if: runner.os == 'Windows'
+        run: |
+          echo "GDAL_HOME=${CONDA_PREFIX}/Library" >> "$GITHUB_ENV"
+          echo "${CONDA_PREFIX}/Library/bin" >> "$GITHUB_PATH"
+
+      - name: Check workspace
+        run: cargo check --workspace
+
+      - name: Verify preprocess CLI help
+        run: cargo run -p bevy_terrain_preprocess -- --help
+
+      - name: Build tutorial dataset
+        run: cargo run -p bevy_terrain_preprocess --example preprocess_tutorial_earth
+
+      - name: Assert tutorial terrain output
+        run: test -f assets/terrains/tutorial_earth/config.tc.ron

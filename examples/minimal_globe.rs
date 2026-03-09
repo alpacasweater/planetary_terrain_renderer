@@ -1,11 +1,10 @@
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
 use bevy_terrain::prelude::*;
-use std::path::Path;
+use std::{env, path::PathBuf};
 
 const RADIUS: f64 = 6_371_000.0;
-const EARTH_CONFIG_PATH: &str = "assets/terrains/earth/config.tc.ron";
-const EARTH_ASSET_PATH: &str = "terrains/earth";
+const DEFAULT_TERRAIN_ROOT: &str = "terrains/earth";
 
 fn main() {
     App::new()
@@ -13,7 +12,8 @@ fn main() {
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(Window {
-                        resolution: WindowResolution::new(1920, 1080),
+                        resolution: WindowResolution::new(1600, 900),
+                        title: "Minimal Globe".into(),
                         ..default()
                     }),
                     ..default()
@@ -23,18 +23,32 @@ fn main() {
             TerrainPlugin,
             SimpleTerrainMaterialPlugin,
             TerrainDebugPlugin,
-            TerrainPickingPlugin,
         ))
         .insert_resource(TerrainSettings::with_albedo())
-        .add_systems(Startup, initialize)
+        .add_systems(Startup, setup)
         .run();
 }
 
-fn initialize(
+fn setup(
     mut commands: Commands,
-    mut loading_images: ResMut<LoadingImages>,
     asset_server: Res<AssetServer>,
+    mut loading_images: ResMut<LoadingImages>,
 ) {
+    // The first CLI argument optionally overrides the terrain root inside `assets/`.
+    let terrain_root = env::args()
+        .nth(1)
+        .unwrap_or_else(|| DEFAULT_TERRAIN_ROOT.to_string());
+    let terrain_config = format!("{terrain_root}/config.tc.ron");
+    let terrain_config_fs = PathBuf::from("assets").join(&terrain_config);
+
+    if !terrain_config_fs.is_file() {
+        warn!(
+            "Missing terrain config at {}. Restore the repo starter assets, run `cargo run -p bevy_terrain_preprocess --example preprocess_tutorial_earth`, or pass a different terrain root as the first example argument.",
+            terrain_config_fs.display()
+        );
+        return;
+    }
+
     let mut view = Entity::PLACEHOLDER;
 
     commands.spawn_big_space(Grid::default(), |root| {
@@ -48,17 +62,10 @@ fn initialize(
             .id();
     });
 
-    if !Path::new(EARTH_CONFIG_PATH).is_file() {
-        warn!(
-            "Missing Earth terrain at {EARTH_CONFIG_PATH}. Restore the repo starter assets or run `./scripts/setup_earth_quickstart.sh`."
-        );
-        return;
-    }
-
     commands.spawn_terrain(
-        asset_server.load("terrains/earth/config.tc.ron"),
+        asset_server.load(terrain_config),
         TerrainViewConfig::default(),
-        SimpleTerrainMaterial::for_terrain(&asset_server, &mut loading_images, EARTH_ASSET_PATH),
+        SimpleTerrainMaterial::for_terrain(&asset_server, &mut loading_images, &terrain_root),
         view,
     );
 }
