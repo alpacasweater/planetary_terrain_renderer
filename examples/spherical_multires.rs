@@ -81,6 +81,7 @@ const TERRAIN_SAMPLE_GRAD_ENV: &str = "MULTIRES_TERRAIN_SAMPLE_GRAD";
 const TERRAIN_HIGH_PRECISION_ENV: &str = "MULTIRES_TERRAIN_HIGH_PRECISION";
 const STREAMING_CACHE_ROOT_ENV: &str = "TERRAIN_STREAMING_CACHE_ROOT";
 const STREAM_ONLINE_ENV: &str = "TERRAIN_STREAM_ONLINE";
+const STREAM_HEIGHT_ENV: &str = "TERRAIN_STREAM_HEIGHT";
 const ENABLE_DRONE_ENV: &str = "MULTIRES_ENABLE_DRONE";
 const DRONE_AGL_ENV: &str = "MULTIRES_DRONE_AGL_M";
 const DRONE_RADIUS_ENV: &str = "MULTIRES_DRONE_ORBIT_RADIUS_M";
@@ -381,8 +382,8 @@ fn main() {
             .add_systems(Update, benchmark::schedule_metal_capture);
     }
 
-    if env_bool(STREAM_ONLINE_ENV, false) {
-        app.insert_resource(TerrainStreamingSettings::online_imagery());
+    if let Some(streaming_settings) = streaming_settings_from_env() {
+        app.insert_resource(streaming_settings);
     }
 
     if perf_title_enabled {
@@ -410,9 +411,23 @@ fn terrain_settings_from_env(upload_budget_bytes_per_frame: usize) -> TerrainSet
         .with_upload_budget_bytes_per_frame(upload_budget_bytes_per_frame);
     match env::var(STREAMING_CACHE_ROOT_ENV) {
         Ok(root) if !root.trim().is_empty() => settings.with_streaming_cache_root(root),
-        _ if env_bool(STREAM_ONLINE_ENV, false) => {
-            settings.with_streaming_cache_root("streaming_cache")
-        }
+        _ if streaming_requested() => settings.with_streaming_cache_root("streaming_cache"),
         _ => settings,
     }
+}
+
+fn streaming_settings_from_env() -> Option<TerrainStreamingSettings> {
+    if !streaming_requested() {
+        return None;
+    }
+
+    Some(if env_bool(STREAM_HEIGHT_ENV, false) {
+        TerrainStreamingSettings::online_imagery_and_height()
+    } else {
+        TerrainStreamingSettings::online_imagery()
+    })
+}
+
+fn streaming_requested() -> bool {
+    env_bool(STREAM_ONLINE_ENV, false) || env_bool(STREAM_HEIGHT_ENV, false)
 }

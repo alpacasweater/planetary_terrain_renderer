@@ -1,7 +1,8 @@
 use crate::{
     plugin::TerrainSettings,
     streaming::{
-        NasaGibsImageryProvider, StreamingProviderError, StreamingTileProvider,
+        NasaGibsImageryProvider, OpenTopographyHeightProvider, StreamingProviderError,
+        StreamingTileProvider,
         cache_writer::{StreamingCacheWriteError, write_materialized_tile},
         source_contract::StreamingTileRequest,
     },
@@ -13,7 +14,7 @@ use bevy::{
     tasks::{IoTaskPool, Task, poll_once},
 };
 use std::cmp::Reverse;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq, Resource)]
 pub struct TerrainStreamingSettings {
@@ -258,6 +259,7 @@ pub fn start_streaming_jobs(
     mut queue: ResMut<StreamingRequestQueue>,
     mut worker: ResMut<StreamingWorker>,
     gibs: Res<NasaGibsImageryProvider>,
+    opentopography: Res<OpenTopographyHeightProvider>,
 ) {
     let available_slots = settings
         .max_inflight_requests
@@ -268,6 +270,7 @@ pub fn start_streaming_jobs(
 
     let cache_root = terrain_settings.streaming_cache_root.clone();
     let gibs = gibs.clone();
+    let opentopography = opentopography.clone();
     let asset_root = PathBuf::from("assets");
     let queued = queue.dequeue_batch(available_slots);
 
@@ -275,6 +278,7 @@ pub fn start_streaming_jobs(
         let request = queued_request.request;
         let cache_root = cache_root.clone();
         let gibs = gibs.clone();
+        let opentopography = opentopography.clone();
         let asset_root = asset_root.clone();
         worker.stats.started_total += 1;
 
@@ -282,14 +286,24 @@ pub fn start_streaming_jobs(
             let result = match request.attachment_label {
                 AttachmentLabel::Custom(ref name) if name == "albedo" => {
                     match cache_root.map(PathBuf::from) {
-                        Some(cache_root) => match gibs.materialize_tile(&request) {
-                            Ok(tile) => write_materialized_tile(&asset_root, &cache_root, &tile)
-                                .map_err(StreamingTaskError::CacheWrite),
-                            Err(error) => Err(StreamingTaskError::Provider(error)),
-                        },
+                        Some(cache_root) => materialize_request_into_cache(
+                            &gibs,
+                            &request,
+                            &asset_root,
+                            &cache_root,
+                        ),
                         None => Err(StreamingTaskError::MissingCacheRoot),
                     }
                 }
+                AttachmentLabel::Height => match cache_root.map(PathBuf::from) {
+                    Some(cache_root) => materialize_request_into_cache(
+                        &opentopography,
+                        &request,
+                        &asset_root,
+                        &cache_root,
+                    ),
+                    None => Err(StreamingTaskError::MissingCacheRoot),
+                },
                 _ => Err(StreamingTaskError::UnsupportedAttachment(
                     request.attachment_label.clone(),
                 )),
@@ -338,6 +352,18 @@ pub fn finish_streaming_jobs(
     worker.inflight = remaining;
 }
 
+fn materialize_request_into_cache<P: StreamingTileProvider>(
+    provider: &P,
+    request: &StreamingTileRequest,
+    asset_root: &Path,
+    cache_root: &Path,
+) -> Result<PathBuf, StreamingTaskError> {
+    let tile = provider
+        .materialize_tile(request)
+        .map_err(StreamingTaskError::Provider)?;
+    write_materialized_tile(asset_root, cache_root, &tile).map_err(StreamingTaskError::CacheWrite)
+}
+
 fn describe_streaming_task_error(error: &StreamingTaskError) -> String {
     match error {
         StreamingTaskError::Provider(error) => error.to_string(),
@@ -359,9 +385,21 @@ mod tests {
     use super::*;
     use crate::{
         math::TerrainShape,
-        terrain_data::{AttachmentConfig, AttachmentLabel},
+        streaming::{
+            CacheFirstLocalTileSource, CacheTileEncoding, LocalTileRequest, LocalTileSourceKind,
+            MaterializedStreamingTile, StreamedAttachmentKind, StreamingSourceAvailability,
+            StreamingSourceDescriptor, StreamingSourceKind,
+        },
+        terrain_data::{AttachmentConfig, AttachmentFormat, AttachmentLabel},
     };
     use bevy::math::IVec2;
+    use std::{
+        fs,
+        io::Cursor,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    use tiff::decoder::{Decoder, DecodingResult};
+    use tiff::encoder::{TiffEncoder, colortype};
 
     fn albedo_request() -> StreamingTileRequest {
         StreamingTileRequest {
@@ -406,5 +444,125 @@ mod tests {
 
         assert!(!queue.enqueue(request, &settings));
         assert_eq!(queue.stats().dropped_policy_total, 1);
+    }
+
+    fn unique_temp_dir() -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough for tests")
+            .as_nanos();
+        std::env::temp_dir().join(format!("terrain_streaming_replay_{unique}"))
+    }
+
+    struct StubImageryProvider;
+
+    fn encode_rgb_fixture_tiff(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {
+        let texel_count = (width * height) as usize;
+        let mut bytes = Vec::with_capacity(texel_count * 3);
+        for _ in 0..texel_count {
+            bytes.extend_from_slice(&rgb);
+        }
+
+        let mut cursor = Cursor::new(Vec::new());
+        let mut encoder = TiffEncoder::new(&mut cursor).unwrap();
+        encoder
+            .write_image::<colortype::RGB8>(width, height, &bytes)
+            .unwrap();
+        cursor.into_inner()
+    }
+
+    impl StreamingTileProvider for StubImageryProvider {
+        fn descriptor(&self) -> StreamingSourceDescriptor {
+            StreamingSourceDescriptor {
+                source_id: "stub/imagery".to_string(),
+                source_kind: StreamingSourceKind::Custom("stub".to_string()),
+                attachment_kind: StreamedAttachmentKind::Imagery,
+            }
+        }
+
+        fn availability(&self, _request: &StreamingTileRequest) -> StreamingSourceAvailability {
+            StreamingSourceAvailability::Available
+        }
+
+        fn materialize_tile(
+            &self,
+            request: &StreamingTileRequest,
+        ) -> Result<MaterializedStreamingTile, StreamingProviderError> {
+            Ok(MaterializedStreamingTile {
+                bytes: encode_rgb_fixture_tiff(
+                    request.attachment_config.texture_size,
+                    request.attachment_config.texture_size,
+                    [12, 34, 56],
+                ),
+                metadata: crate::streaming::CachedTileMetadata {
+                    format_version: crate::streaming::CURRENT_STREAMING_CACHE_FORMAT_VERSION,
+                    terrain_path: request.terrain_path.clone(),
+                    attachment_label: request.attachment_label.clone(),
+                    coordinate: request.coordinate,
+                    source: self.descriptor(),
+                    fetched_at_unix_ms: 1,
+                    expires_at_unix_ms: None,
+                    source_zoom: Some(request.coordinate.lod),
+                    source_revision: None,
+                    source_content_hash: None,
+                    source_crs: Some("EPSG:4326".to_string()),
+                    encoding: CacheTileEncoding::Tiff,
+                },
+            })
+        }
+    }
+
+    #[test]
+    fn warmed_cache_replays_without_network_requests() {
+        let asset_root = unique_temp_dir();
+        let cache_root = PathBuf::from("streaming_cache");
+        let request = StreamingTileRequest {
+            terrain_path: "terrains/earth".to_string(),
+            attachment_label: AttachmentLabel::Custom("albedo".to_string()),
+            attachment_config: AttachmentConfig {
+                texture_size: 4,
+                border_size: 0,
+                mip_level_count: 1,
+                mask: false,
+                format: AttachmentFormat::Rgb8U,
+            },
+            coordinate: crate::math::TileCoordinate::new(0, 1, IVec2::new(0, 1)),
+            terrain_shape: TerrainShape::WGS84,
+            terrain_lod_count: 3,
+        };
+
+        fs::create_dir_all(&asset_root).unwrap();
+        let written = materialize_request_into_cache(
+            &StubImageryProvider,
+            &request,
+            &asset_root,
+            &cache_root,
+        )
+        .expect("cache warm should succeed");
+
+        let resolver = CacheFirstLocalTileSource::new(asset_root.clone(), Some(cache_root));
+        let resolved = resolver
+            .resolve_present_tile(&LocalTileRequest {
+                terrain_path: request.terrain_path.clone(),
+                attachment_label: request.attachment_label.clone(),
+                coordinate: request.coordinate,
+            })
+            .expect("offline replay should resolve the warmed cache");
+
+        assert_eq!(resolved.asset_path, written);
+        assert_eq!(resolved.source_kind, LocalTileSourceKind::StreamingCache);
+
+        let mut decoder = Decoder::new(Cursor::new(fs::read(asset_root.join(written)).unwrap()))
+            .expect("warmed tile should stay loader-compatible");
+        match decoder.read_image().unwrap() {
+            DecodingResult::U8(bytes) => assert_eq!(&bytes[0..3], &[12, 34, 56]),
+            other => panic!("expected RGB8 TIFF bytes, got {other:?}"),
+        }
+
+        let mut queue = StreamingRequestQueue::default();
+        assert!(!queue.enqueue(request, &TerrainStreamingSettings::default()));
+        assert_eq!(queue.stats().dropped_offline_total, 1);
+
+        fs::remove_dir_all(asset_root).unwrap();
     }
 }

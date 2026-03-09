@@ -88,10 +88,24 @@ Default example behavior:
 - cache reads prefer `assets/streaming_cache/` and then fall back to the bundled starter Earth
 
 Current implementation limits:
-- imagery only; online height streaming is not implemented yet
 - the first provider is NASA GIBS `MODIS_Terra_CorrectedReflectance_TrueColor`
 - cache root must be asset-relative
 - antimeridian-crossing requests are not implemented yet, so the bundled starter data still matters near that boundary
+
+Optional online height refinement is also available, but it is not the default quick-start path.
+It requires an OpenTopography API key and currently uses `SRTM_GL1_Ellip`, so coverage is limited to roughly `60N` to `56S`:
+
+```bash
+OPENTOPOGRAPHY_API_KEY=your-key \
+TERRAIN_STREAM_HEIGHT=1 \
+cargo run --example minimal_globe
+```
+
+Height-streaming notes:
+- `TERRAIN_STREAM_HEIGHT=1` also enables online imagery
+- streamed height still lands in the same local cache and replays offline later
+- the current height backend is a first implementation, so unsupported regions cleanly fall back to the bundled starter height
+- OpenTopography API details: [Global Datasets](https://opentopography.org/developers)
 
 If you want a non-default cache location, keep it asset-relative:
 

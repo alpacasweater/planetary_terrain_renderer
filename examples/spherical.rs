@@ -8,6 +8,7 @@ const EARTH_CONFIG_PATH: &str = "assets/terrains/earth/config.tc.ron";
 const EARTH_ASSET_PATH: &str = "terrains/earth";
 const STREAMING_CACHE_ROOT_ENV: &str = "TERRAIN_STREAMING_CACHE_ROOT";
 const STREAM_ONLINE_ENV: &str = "TERRAIN_STREAM_ONLINE";
+const STREAM_HEIGHT_ENV: &str = "TERRAIN_STREAM_HEIGHT";
 
 fn main() {
     let mut app = App::new();
@@ -30,8 +31,8 @@ fn main() {
     .insert_resource(terrain_settings_from_env())
     .add_systems(Startup, initialize);
 
-    if env_var_enabled(STREAM_ONLINE_ENV) {
-        app.insert_resource(TerrainStreamingSettings::online_imagery());
+    if let Some(streaming_settings) = streaming_settings_from_env() {
+        app.insert_resource(streaming_settings);
     }
 
     app.run();
@@ -41,11 +42,25 @@ fn terrain_settings_from_env() -> TerrainSettings {
     let settings = TerrainSettings::with_albedo();
     match env::var(STREAMING_CACHE_ROOT_ENV) {
         Ok(root) if !root.trim().is_empty() => settings.with_streaming_cache_root(root),
-        _ if env_var_enabled(STREAM_ONLINE_ENV) => {
-            settings.with_streaming_cache_root("streaming_cache")
-        }
+        _ if streaming_requested() => settings.with_streaming_cache_root("streaming_cache"),
         _ => settings,
     }
+}
+
+fn streaming_settings_from_env() -> Option<TerrainStreamingSettings> {
+    if !streaming_requested() {
+        return None;
+    }
+
+    Some(if env_var_enabled(STREAM_HEIGHT_ENV) {
+        TerrainStreamingSettings::online_imagery_and_height()
+    } else {
+        TerrainStreamingSettings::online_imagery()
+    })
+}
+
+fn streaming_requested() -> bool {
+    env_var_enabled(STREAM_ONLINE_ENV) || env_var_enabled(STREAM_HEIGHT_ENV)
 }
 
 fn env_var_enabled(name: &str) -> bool {
