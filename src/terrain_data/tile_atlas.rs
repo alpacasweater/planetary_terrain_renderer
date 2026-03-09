@@ -3,11 +3,13 @@ use crate::{
     perf::{PHASE_MAIN_TILE_ATLAS_UPDATE, PHASE_MAIN_UPDATE_TERRAIN_BUFFER, TerrainPerfTelemetry},
     plugin::TerrainSettings,
     render::TerrainUniform,
-    streaming::{CacheFirstLocalTileSource, LocalTileRequest, LocalTileSourceKind},
+    streaming::{
+        CacheFirstLocalTileSource, LocalTileRequest, LocalTileSourceKind, StreamingTileRequest,
+    },
     terrain::{CURRENT_GEODETIC_MAPPING_VERSION, TerrainConfig, TileAvailability},
     terrain_data::{
-        Attachment, AttachmentData, AttachmentLabel, AttachmentTile, AttachmentTileWithData,
-        DefaultLoader, TileTree, TileTreeEntry,
+        Attachment, AttachmentConfig, AttachmentData, AttachmentLabel, AttachmentTile,
+        AttachmentTileWithData, DefaultLoader, TileTree, TileTreeEntry,
     },
     terrain_view::TerrainViewComponents,
 };
@@ -95,6 +97,7 @@ pub struct TileAtlas {
     pub(crate) uploading_tiles: Vec<AttachmentTileWithData>,
     pub(crate) downloading_tiles: Vec<Task<AttachmentTileWithData>>,
     pub(crate) to_load: Vec<AttachmentTile>,
+    pub(crate) to_stream: Vec<AttachmentTile>,
 
     pub(crate) lod_count: u32,
     pub(crate) min_height: f32,
@@ -235,6 +238,7 @@ impl TileAtlas {
             terrain_path,
             streaming_cache_root: settings.streaming_cache_root.as_ref().map(PathBuf::from),
             to_load: default(),
+            to_stream: default(),
             uploading_tiles: default(),
             downloading_tiles: default(),
             lod_count: config.lod_count,
@@ -373,7 +377,13 @@ impl TileAtlas {
             tile.requests += 1;
         } else {
             // Keep the current runtime local-first until remote cache fill exists.
-            if !self.has_all_attachments_locally(tile_coordinate) {
+            let missing_attachments = self.missing_local_attachments(tile_coordinate);
+            if !missing_attachments.is_empty() {
+                self.to_stream
+                    .extend(missing_attachments.into_iter().map(|label| AttachmentTile {
+                        coordinate: tile_coordinate,
+                        label,
+                    }));
                 return;
             }
 
@@ -443,21 +453,25 @@ impl TileAtlas {
             })
     }
 
-    fn has_all_attachments_locally(&self, tile_coordinate: TileCoordinate) -> bool {
+    fn missing_local_attachments(&self, tile_coordinate: TileCoordinate) -> Vec<AttachmentLabel> {
         let tile_source = CacheFirstLocalTileSource::new(
             PathBuf::from("assets"),
             self.streaming_cache_root.clone(),
         );
 
-        self.attachments.keys().all(|label| {
-            tile_source
-                .resolve_present_tile(&LocalTileRequest {
-                    terrain_path: self.terrain_path.clone(),
-                    attachment_label: label.clone(),
-                    coordinate: tile_coordinate,
-                })
-                .is_some()
-        })
+        self.attachments
+            .keys()
+            .filter(|label| {
+                tile_source
+                    .resolve_present_tile(&LocalTileRequest {
+                        terrain_path: self.terrain_path.clone(),
+                        attachment_label: (*label).clone(),
+                        coordinate: tile_coordinate,
+                    })
+                    .is_none()
+            })
+            .cloned()
+            .collect()
     }
 
     fn cancel_loading_tile(&mut self, tile_coordinate: TileCoordinate) -> bool {
@@ -477,6 +491,31 @@ impl TileAtlas {
             (pending_before - self.to_load.len()) as u64;
         self.unused_indices.push_back(tile_state.atlas_index);
         true
+    }
+
+    pub(crate) fn drain_streaming_requests(&mut self) -> Vec<StreamingTileRequest> {
+        let requests = std::mem::take(&mut self.to_stream);
+        requests
+            .into_iter()
+            .filter_map(|tile| {
+                self.attachments
+                    .get(&tile.label)
+                    .map(|attachment| StreamingTileRequest {
+                        terrain_path: self.terrain_path.clone(),
+                        attachment_label: tile.label,
+                        attachment_config: AttachmentConfig {
+                            texture_size: attachment.texture_size,
+                            border_size: attachment.border_size,
+                            mip_level_count: attachment.mip_level_count,
+                            mask: attachment.mask,
+                            format: attachment.format,
+                        },
+                        coordinate: tile.coordinate,
+                        terrain_shape: self.shape,
+                        terrain_lod_count: self.lod_count,
+                    })
+            })
+            .collect()
     }
 }
 

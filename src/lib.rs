@@ -86,6 +86,7 @@ pub mod prelude {
         render::TerrainMaterialPlugin,
         simple::{SimpleTerrainMaterial, SimpleTerrainMaterialPlugin},
         spawn::SpawnTerrainCommandsExt,
+        streaming::{NasaGibsImageryProvider, TerrainStreamingSettings},
         terrain::TerrainConfig,
         terrain_data::{
             AttachmentConfig, AttachmentFormat, AttachmentLabel, GpuTileAtlas, TileAtlas,

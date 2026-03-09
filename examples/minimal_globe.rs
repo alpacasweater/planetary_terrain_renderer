@@ -6,28 +6,34 @@ use std::{env, path::PathBuf};
 const RADIUS: f64 = 6_371_000.0;
 const DEFAULT_TERRAIN_ROOT: &str = "terrains/earth";
 const STREAMING_CACHE_ROOT_ENV: &str = "TERRAIN_STREAMING_CACHE_ROOT";
+const STREAM_ONLINE_ENV: &str = "TERRAIN_STREAM_ONLINE";
 
 fn main() {
-    App::new()
-        .add_plugins((
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        resolution: WindowResolution::new(1600, 900),
-                        title: "Minimal Globe".into(),
-                        ..default()
-                    }),
+    let mut app = App::new();
+    app.add_plugins((
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    resolution: WindowResolution::new(1600, 900),
+                    title: "Minimal Globe".into(),
                     ..default()
-                })
-                .build()
-                .disable::<TransformPlugin>(),
-            TerrainPlugin,
-            SimpleTerrainMaterialPlugin,
-            TerrainDebugPlugin,
-        ))
-        .insert_resource(terrain_settings_from_env())
-        .add_systems(Startup, setup)
-        .run();
+                }),
+                ..default()
+            })
+            .build()
+            .disable::<TransformPlugin>(),
+        TerrainPlugin,
+        SimpleTerrainMaterialPlugin,
+        TerrainDebugPlugin,
+    ))
+    .insert_resource(terrain_settings_from_env())
+    .add_systems(Startup, setup);
+
+    if env_var_enabled(STREAM_ONLINE_ENV) {
+        app.insert_resource(TerrainStreamingSettings::online_imagery());
+    }
+
+    app.run();
 }
 
 fn terrain_settings_from_env() -> TerrainSettings {
@@ -36,6 +42,13 @@ fn terrain_settings_from_env() -> TerrainSettings {
         Ok(root) if !root.trim().is_empty() => settings.with_streaming_cache_root(root),
         _ => settings,
     }
+}
+
+fn env_var_enabled(name: &str) -> bool {
+    matches!(
+        env::var(name).ok().as_deref(),
+        Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
+    )
 }
 
 fn setup(

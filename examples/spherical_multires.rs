@@ -80,6 +80,7 @@ const TERRAIN_BLEND_ENV: &str = "MULTIRES_TERRAIN_BLEND";
 const TERRAIN_SAMPLE_GRAD_ENV: &str = "MULTIRES_TERRAIN_SAMPLE_GRAD";
 const TERRAIN_HIGH_PRECISION_ENV: &str = "MULTIRES_TERRAIN_HIGH_PRECISION";
 const STREAMING_CACHE_ROOT_ENV: &str = "TERRAIN_STREAMING_CACHE_ROOT";
+const STREAM_ONLINE_ENV: &str = "TERRAIN_STREAM_ONLINE";
 const ENABLE_DRONE_ENV: &str = "MULTIRES_ENABLE_DRONE";
 const DRONE_AGL_ENV: &str = "MULTIRES_DRONE_AGL_M";
 const DRONE_RADIUS_ENV: &str = "MULTIRES_DRONE_ORBIT_RADIUS_M";
@@ -378,6 +379,10 @@ fn main() {
     if let Some(config) = metal_capture_config_from_env() {
         app.insert_resource(config)
             .add_systems(Update, benchmark::schedule_metal_capture);
+    }
+
+    if env_bool(STREAM_ONLINE_ENV, false) {
+        app.insert_resource(TerrainStreamingSettings::online_imagery());
     }
 
     if perf_title_enabled {

@@ -6,7 +6,9 @@
 
 pub mod cache_manifest;
 pub mod cache_paths;
+pub mod gibs;
+pub mod scheduler;
 pub mod source_contract;
 pub mod tile_source;
 
-pub use self::{cache_manifest::*, source_contract::*, tile_source::*};
+pub use self::{cache_manifest::*, gibs::*, scheduler::*, source_contract::*, tile_source::*};
