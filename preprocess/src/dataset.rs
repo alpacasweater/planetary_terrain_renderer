@@ -285,13 +285,15 @@ pub(crate) fn create_empty_dataset<T: Copy + GdalType>(
 
     // Todo: consider copying the photometric info
 
+    let block_size_x = size.x.min(512);
+    let block_size_y = size.y.min(512);
     let options = RasterCreationOptions::from_iter(
         [
-            "TILED=YES",
-            "BLOCKXSIZE=512",
-            "BLOCKYSIZE=512",
+            "TILED=YES".to_string(),
+            format!("BLOCKXSIZE={block_size_x}"),
+            format!("BLOCKYSIZE={block_size_y}"),
             //  "SPARSE_OK=TRUE",
-            "INTERLEAVE=PIXEL", // Todo: benchmark pixel vs band
+            "INTERLEAVE=PIXEL".to_string(), // Todo: benchmark pixel vs band
         ]
         .into_iter(),
     );

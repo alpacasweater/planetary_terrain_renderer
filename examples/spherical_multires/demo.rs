@@ -633,15 +633,34 @@ pub fn initialize(
         }
     });
 
-    commands.spawn_terrain(
-        asset_server.load(BASE_TERRAIN_CONFIG),
-        TerrainViewConfig::default(),
-        CustomMaterial {
-            gradient: gradient.clone(),
-            gradient_info: GradientInfo { mode: 2 },
-        },
-        view,
-    );
+    if super::asset_exists(BASE_TERRAIN_CONFIG) {
+        let base_gradient_mode = if super::asset_dir_exists("terrains/earth/albedo") {
+            2
+        } else {
+            0
+        };
+
+        if base_gradient_mode == 0 {
+            info!("Base Earth albedo not found; using height-gradient coloring.");
+        }
+
+        commands.spawn_terrain(
+            asset_server.load(BASE_TERRAIN_CONFIG),
+            TerrainViewConfig::default(),
+            CustomMaterial {
+                gradient: gradient.clone(),
+                gradient_info: GradientInfo {
+                    mode: base_gradient_mode,
+                },
+            },
+            view,
+        );
+    } else {
+        warn!(
+            "Base terrain config missing at '{}'. Restore the repo starter assets or run `./scripts/setup_earth_quickstart.sh`.",
+            BASE_TERRAIN_CONFIG
+        );
+    }
 
     let mut loaded_overlays = 0_u32;
     for key in &selected_keys {
@@ -673,7 +692,7 @@ pub fn initialize(
         loaded_overlays += 1;
     }
 
-    info!("Loaded base terrain: {BASE_TERRAIN_CONFIG}");
+    info!("Base terrain: {BASE_TERRAIN_CONFIG}");
     info!("Overlay selection from {OVERLAY_ENV}: {:?}", selected_keys);
     info!("Loaded overlays: {loaded_overlays}");
     if let Some(preset) = focus_preset {

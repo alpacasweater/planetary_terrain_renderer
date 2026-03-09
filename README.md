@@ -13,25 +13,29 @@ Project origin:
 
 ## Quick Start
 
-From repo root:
+A low-resolution Earth starter dataset is included in the repo.
+
+Run the globe demo:
 
 ```bash
 cargo run --example spherical
 ```
 
-Multi-resolution demo:
+Optional base-only multi-resolution demo:
 
 ```bash
-cargo run --example spherical_multires
+MULTIRES_OVERLAYS=none cargo run --example spherical_multires
 ```
 
-Choose overlays:
+Notes:
+- the starter Earth lives under `assets/terrains/earth` and includes both height and albedo
+- it is intentionally low resolution so a clean clone stays small and the examples start immediately
+- `./scripts/setup_earth_quickstart.sh` rebuilds a starter-sized Earth locally and adds albedo when `source_data/true_marble.tif` is available
+- for the larger validated Earth build and regional overlays, use [Multi-resolution workflow](docs/multires_workflow.md)
+
+Once you have built additional overlay datasets, you can load them in the multi-resolution demo:
 
 ```bash
-# base only
-MULTIRES_OVERLAYS=none cargo run --example spherical_multires
-
-# swiss, saxony, los, srtm_* are supported keys
 MULTIRES_OVERLAYS=swiss,los cargo run --example spherical_multires
 ```
 
@@ -52,10 +56,6 @@ MULTIRES_OVERLAYS=swiss \
 MULTIRES_ENABLE_CLICK_READOUT=1 \
 cargo run --example spherical_multires
 ```
-
-Then:
-- left click terrain to inspect the rendered hit point
-- use `Cmd+C` or `Ctrl+C` to copy the last clicked result
 
 ## Current Status
 

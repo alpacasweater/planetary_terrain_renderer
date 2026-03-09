@@ -5,5 +5,7 @@ target
 captures
 assets/**/data/*
 assets/**/config.tc
-assets/terrains/
+assets/terrains/*
+!assets/terrains/earth/
+!assets/terrains/earth/**
 source_data

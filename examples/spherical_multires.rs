@@ -413,3 +413,8 @@ fn asset_exists(asset_path: &str) -> bool {
     let fs_path = format!("assets/{asset_path}");
     Path::new(&fs_path).is_file()
 }
+
+fn asset_dir_exists(asset_path: &str) -> bool {
+    let fs_path = format!("assets/{asset_path}");
+    Path::new(&fs_path).is_dir()
+}

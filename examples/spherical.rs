@@ -2,6 +2,7 @@ use bevy::shader::ShaderRef;
 use bevy::window::WindowResolution;
 use bevy::{prelude::*, reflect::TypePath, render::render_resource::*};
 use bevy_terrain::prelude::*;
+use std::path::Path;
 
 const RADIUS: f64 = 6371000.0;
 
@@ -55,6 +56,14 @@ fn initialize(
     mut images: ResMut<LoadingImages>,
     asset_server: Res<AssetServer>,
 ) {
+    let earth_config_path = "assets/terrains/earth/config.tc.ron";
+    let earth_albedo_path = "assets/terrains/earth/albedo";
+    let earth_gradient_mode = if Path::new(earth_albedo_path).is_dir() {
+        2
+    } else {
+        0
+    };
+
     let gradient1 = asset_server.load("textures/gradient1.png");
     images.load_image(
         &gradient1,
@@ -82,15 +91,29 @@ fn initialize(
             .id();
     });
 
-    commands.spawn_terrain(
-        asset_server.load("terrains/earth/config.tc.ron"),
-        TerrainViewConfig::default(),
-        CustomMaterial {
-            gradient: gradient1.clone(),
-            gradient_info: GradientInfo { mode: 2 },
-        },
-        view,
-    );
+    if Path::new(earth_config_path).is_file() {
+        if earth_gradient_mode == 0 {
+            info!(
+                "Earth albedo attachment not found at {earth_albedo_path}; using height-gradient coloring."
+            );
+        }
+
+        commands.spawn_terrain(
+            asset_server.load("terrains/earth/config.tc.ron"),
+            TerrainViewConfig::default(),
+            CustomMaterial {
+                gradient: gradient1.clone(),
+                gradient_info: GradientInfo {
+                    mode: earth_gradient_mode,
+                },
+            },
+            view,
+        );
+    } else {
+        warn!(
+            "Missing Earth terrain at {earth_config_path}. Restore the repo starter assets or run `./scripts/setup_earth_quickstart.sh`."
+        );
+    }
 
     // commands.spawn_terrain(
     //     asset_server.load("terrains/los/config.tc.ron"),
