@@ -28,6 +28,7 @@ This keeps the runtime model simple:
 - bundled starter Earth renders immediately, even offline
 - missing `albedo` tiles can be fetched online and written under `assets/streaming_cache/`
 - later runs reuse the warmed cache before falling back to the bundled Earth
+- the examples automatically raise the online refinement ceiling to `lod 6`; use `TERRAIN_STREAMING_MAX_LOD` if you want a different cap
 
 Current online limits:
 - the current provider is NASA GIBS true-color imagery
@@ -41,8 +42,8 @@ OPENTOPOGRAPHY_API_KEY=your-key TERRAIN_STREAM_HEIGHT=1 cargo run --example mini
 
 Current height limits:
 - `TERRAIN_STREAM_HEIGHT=1` also enables online imagery
-- the first height provider uses OpenTopography `SRTM_GL1_Ellip`
-- coverage is limited to roughly `60N` to `56S`
+- the first height provider uses OpenTopography `AW3D30_E`
+- this is an ellipsoidal ALOS World 3D source, which keeps the height semantics closer to the renderer's WGS84 model
 - unsupported regions fall back to the bundled starter Earth height
 
 ## 2. Preprocess a Dataset Without Downloading Anything
@@ -169,5 +170,6 @@ Those larger source files are intentionally not committed.
 - `cargo run --example minimal_globe` uses the bundled Earth by default. Pass a different terrain root as the first argument when you want to inspect another dataset.
 - `TERRAIN_STREAMING_CACHE_ROOT` must be asset-relative. Use `streaming_cache`, not an absolute filesystem path.
 - `TERRAIN_STREAM_ONLINE=1` is opt-in. Without it, the renderer never makes network requests.
-- `TERRAIN_STREAM_HEIGHT=1` requires `OPENTOPOGRAPHY_API_KEY` and currently targets `SRTM_GL1_Ellip`.
+- `TERRAIN_STREAMING_MAX_LOD` controls how far online refinement can go beyond the bundled starter dataset. The examples default to `6` when streaming is enabled.
+- `TERRAIN_STREAM_HEIGHT=1` requires `OPENTOPOGRAPHY_API_KEY` and currently targets `AW3D30_E`.
 - The preprocess CLI currently forces `GDAL_NUM_THREADS=1`. That is intentional until the custom transformer is safely cloneable across GDAL worker threads.

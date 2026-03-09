@@ -82,6 +82,8 @@ const TERRAIN_HIGH_PRECISION_ENV: &str = "MULTIRES_TERRAIN_HIGH_PRECISION";
 const STREAMING_CACHE_ROOT_ENV: &str = "TERRAIN_STREAMING_CACHE_ROOT";
 const STREAM_ONLINE_ENV: &str = "TERRAIN_STREAM_ONLINE";
 const STREAM_HEIGHT_ENV: &str = "TERRAIN_STREAM_HEIGHT";
+const STREAMING_MAX_LOD_ENV: &str = "TERRAIN_STREAMING_MAX_LOD";
+const DEFAULT_STREAMING_MAX_LOD: u32 = 6;
 const ENABLE_DRONE_ENV: &str = "MULTIRES_ENABLE_DRONE";
 const DRONE_AGL_ENV: &str = "MULTIRES_DRONE_AGL_M";
 const DRONE_RADIUS_ENV: &str = "MULTIRES_DRONE_ORBIT_RADIUS_M";
@@ -407,8 +409,12 @@ fn asset_dir_exists(asset_path: &str) -> bool {
 }
 
 fn terrain_settings_from_env(upload_budget_bytes_per_frame: usize) -> TerrainSettings {
-    let settings = TerrainSettings::with_albedo()
+    let mut settings = TerrainSettings::with_albedo()
         .with_upload_budget_bytes_per_frame(upload_budget_bytes_per_frame);
+    if let Some(max_lod) = streaming_target_lod_count_from_env() {
+        settings = settings.with_streaming_target_lod_count(max_lod);
+    }
+
     match env::var(STREAMING_CACHE_ROOT_ENV) {
         Ok(root) if !root.trim().is_empty() => settings.with_streaming_cache_root(root),
         _ if streaming_requested() => settings.with_streaming_cache_root("streaming_cache"),
@@ -430,4 +436,12 @@ fn streaming_settings_from_env() -> Option<TerrainStreamingSettings> {
 
 fn streaming_requested() -> bool {
     env_bool(STREAM_ONLINE_ENV, false) || env_bool(STREAM_HEIGHT_ENV, false)
+}
+
+fn streaming_target_lod_count_from_env() -> Option<u32> {
+    match env::var(STREAMING_MAX_LOD_ENV) {
+        Ok(value) => value.trim().parse().ok(),
+        Err(_) if streaming_requested() => Some(DEFAULT_STREAMING_MAX_LOD),
+        Err(_) => None,
+    }
 }

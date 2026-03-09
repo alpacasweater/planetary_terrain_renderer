@@ -228,6 +228,10 @@ impl TileAtlas {
             RenderAssetUsages::all(),
         ));
         let terrain_path = normalize_terrain_asset_path(&config.path);
+        let lod_count = settings
+            .streaming_target_lod_count
+            .map(|override_lod| override_lod.max(config.lod_count))
+            .unwrap_or(config.lod_count);
 
         Self {
             attachments,
@@ -241,7 +245,7 @@ impl TileAtlas {
             to_stream: default(),
             uploading_tiles: default(),
             downloading_tiles: default(),
-            lod_count: config.lod_count,
+            lod_count,
             min_height: config.min_height,
             max_height: config.max_height,
             height_scale: 1.0,

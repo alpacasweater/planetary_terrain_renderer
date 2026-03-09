@@ -84,6 +84,7 @@ TERRAIN_STREAM_ONLINE=1 cargo run --example minimal_globe
 
 Default example behavior:
 - when `TERRAIN_STREAM_ONLINE=1` is set and `TERRAIN_STREAMING_CACHE_ROOT` is unset, the examples use `streaming_cache`
+- when online streaming is enabled and `TERRAIN_STREAMING_MAX_LOD` is unset, the examples allow refinement up to `lod 6`
 - streamed tiles are written under `assets/streaming_cache/`
 - cache reads prefer `assets/streaming_cache/` and then fall back to the bundled starter Earth
 
@@ -93,7 +94,7 @@ Current implementation limits:
 - antimeridian-crossing requests are not implemented yet, so the bundled starter data still matters near that boundary
 
 Optional online height refinement is also available, but it is not the default quick-start path.
-It requires an OpenTopography API key and currently uses `SRTM_GL1_Ellip`, so coverage is limited to roughly `60N` to `56S`:
+It requires an OpenTopography API key and currently uses `AW3D30_E`:
 
 ```bash
 OPENTOPOGRAPHY_API_KEY=your-key \
@@ -105,6 +106,7 @@ Height-streaming notes:
 - `TERRAIN_STREAM_HEIGHT=1` also enables online imagery
 - streamed height still lands in the same local cache and replays offline later
 - the current height backend is a first implementation, so unsupported regions cleanly fall back to the bundled starter height
+- `AW3D30_E` is an ellipsoidal ALOS World 3D source exposed by OpenTopography
 - OpenTopography API details: [Global Datasets](https://opentopography.org/developers)
 
 If you want a non-default cache location, keep it asset-relative:
@@ -112,6 +114,14 @@ If you want a non-default cache location, keep it asset-relative:
 ```bash
 TERRAIN_STREAM_ONLINE=1 \
 TERRAIN_STREAMING_CACHE_ROOT=my_cache \
+cargo run --example minimal_globe
+```
+
+If you want to tune how far online refinement can go:
+
+```bash
+TERRAIN_STREAM_ONLINE=1 \
+TERRAIN_STREAMING_MAX_LOD=7 \
 cargo run --example minimal_globe
 ```
 

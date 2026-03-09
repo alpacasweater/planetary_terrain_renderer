@@ -9,6 +9,8 @@ const EARTH_ASSET_PATH: &str = "terrains/earth";
 const STREAMING_CACHE_ROOT_ENV: &str = "TERRAIN_STREAMING_CACHE_ROOT";
 const STREAM_ONLINE_ENV: &str = "TERRAIN_STREAM_ONLINE";
 const STREAM_HEIGHT_ENV: &str = "TERRAIN_STREAM_HEIGHT";
+const STREAMING_MAX_LOD_ENV: &str = "TERRAIN_STREAMING_MAX_LOD";
+const DEFAULT_STREAMING_MAX_LOD: u32 = 6;
 
 fn main() {
     let mut app = App::new();
@@ -39,7 +41,11 @@ fn main() {
 }
 
 fn terrain_settings_from_env() -> TerrainSettings {
-    let settings = TerrainSettings::with_albedo();
+    let mut settings = TerrainSettings::with_albedo();
+    if let Some(max_lod) = streaming_target_lod_count_from_env() {
+        settings = settings.with_streaming_target_lod_count(max_lod);
+    }
+
     match env::var(STREAMING_CACHE_ROOT_ENV) {
         Ok(root) if !root.trim().is_empty() => settings.with_streaming_cache_root(root),
         _ if streaming_requested() => settings.with_streaming_cache_root("streaming_cache"),
@@ -61,6 +67,14 @@ fn streaming_settings_from_env() -> Option<TerrainStreamingSettings> {
 
 fn streaming_requested() -> bool {
     env_var_enabled(STREAM_ONLINE_ENV) || env_var_enabled(STREAM_HEIGHT_ENV)
+}
+
+fn streaming_target_lod_count_from_env() -> Option<u32> {
+    match env::var(STREAMING_MAX_LOD_ENV) {
+        Ok(value) => value.trim().parse().ok(),
+        Err(_) if streaming_requested() => Some(DEFAULT_STREAMING_MAX_LOD),
+        Err(_) => None,
+    }
 }
 
 fn env_var_enabled(name: &str) -> bool {

@@ -20,10 +20,8 @@ use tiff::{
 };
 
 const DEFAULT_OPENTOPOGRAPHY_ENDPOINT: &str = "https://portal.opentopography.org/API/globaldem";
-const DEFAULT_OPENTOPOGRAPHY_DEM_TYPE: &str = "SRTM_GL1_Ellip";
+const DEFAULT_OPENTOPOGRAPHY_DEM_TYPE: &str = "AW3D30_E";
 const DEFAULT_OPENTOPOGRAPHY_OUTPUT_FORMAT: &str = "GTiff";
-const DEFAULT_SRTM_GL1_ELLIP_MIN_LAT_DEG: f64 = -56.0;
-const DEFAULT_SRTM_GL1_ELLIP_MAX_LAT_DEG: f64 = 60.0;
 const PLAUSIBLE_EARTH_MIN_HEIGHT_M: f32 = -20_000.0;
 const PLAUSIBLE_EARTH_MAX_HEIGHT_M: f32 = 20_000.0;
 
@@ -41,7 +39,7 @@ pub struct OpenTopographyHeightConfig {
 impl Default for OpenTopographyHeightConfig {
     fn default() -> Self {
         Self {
-            source_id: "opentopography/srtm_gl1_ellip".to_string(),
+            source_id: "opentopography/aw3d30_e".to_string(),
             endpoint: DEFAULT_OPENTOPOGRAPHY_ENDPOINT.to_string(),
             dem_type: env::var("OPENTOPOGRAPHY_DEM_TYPE")
                 .ok()
@@ -121,16 +119,6 @@ impl OpenTopographyHeightProvider {
         })?;
 
         let bbox_lon_lat = request_lon_lat_bbox(request)?;
-        if self.config.dem_type == DEFAULT_OPENTOPOGRAPHY_DEM_TYPE
-            && (bbox_lon_lat[1] < DEFAULT_SRTM_GL1_ELLIP_MIN_LAT_DEG
-                || bbox_lon_lat[3] > DEFAULT_SRTM_GL1_ELLIP_MAX_LAT_DEG)
-        {
-            return Err(StreamingProviderError::Unavailable(
-                "OpenTopography SRTM_GL1_Ellip coverage is limited to roughly 60N to 56S"
-                    .to_string(),
-            ));
-        }
-
         Ok(OpenTopographyGlobalDemRequest {
             endpoint: self.config.endpoint.clone(),
             dem_type: self.config.dem_type.clone(),
@@ -419,10 +407,18 @@ fn current_unix_ms() -> u64 {
 mod tests {
     use super::*;
     use crate::{
-        math::{TerrainShape, TileCoordinate},
+        math::{Coordinate, TerrainShape, TileCoordinate, ViewCoordinate},
+        streaming::cache_writer::write_materialized_tile,
         terrain_data::{AttachmentConfig, AttachmentLabel},
     };
     use bevy::math::IVec2;
+    use std::{
+        fs,
+        io::Cursor,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    use tiff::decoder::{Decoder, DecodingResult};
 
     fn height_request(tile: TileCoordinate) -> StreamingTileRequest {
         StreamingTileRequest {
@@ -453,7 +449,7 @@ mod tests {
 
         let url = planned.url();
         assert!(url.starts_with(DEFAULT_OPENTOPOGRAPHY_ENDPOINT));
-        assert!(url.contains("demtype=SRTM_GL1_Ellip"));
+        assert!(url.contains("demtype=AW3D30_E"));
         assert!(url.contains("outputFormat=GTiff"));
         assert!(url.contains("API_Key=test-key"));
     }
@@ -484,5 +480,53 @@ mod tests {
             provider.availability(&request),
             StreamingSourceAvailability::Unavailable { .. }
         ));
+    }
+
+    fn unique_temp_dir() -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough for tests")
+            .as_nanos();
+        std::env::temp_dir().join(format!("terrain_opentopography_live_{unique}"))
+    }
+
+    #[test]
+    #[ignore = "requires OPENTOPOGRAPHY_API_KEY and live network access"]
+    fn live_provider_materializes_and_caches_a_height_tile() {
+        if std::env::var("OPENTOPOGRAPHY_API_KEY").is_err()
+            && std::env::var("OPEN_TOPOGRAPHY_API_KEY").is_err()
+        {
+            panic!("OPENTOPOGRAPHY_API_KEY is required for the live smoke test");
+        }
+
+        let provider = OpenTopographyHeightProvider::default();
+        let sample_coordinate = Coordinate::from_lat_lon_degrees(37.705, -122.495);
+        let view_coordinate = ViewCoordinate::new(sample_coordinate, 6);
+        let request = height_request(TileCoordinate::new(
+            sample_coordinate.face,
+            6,
+            view_coordinate.xy,
+        ));
+        let tile = provider
+            .materialize_tile(&request)
+            .expect("live provider should return a TIFF height tile");
+
+        let asset_root = unique_temp_dir();
+        fs::create_dir_all(&asset_root).unwrap();
+        let cache_root = PathBuf::from("streaming_cache");
+        let written = write_materialized_tile(&asset_root, &cache_root, &tile)
+            .expect("cache writer should persist the live tile");
+
+        let mut decoder = Decoder::new(Cursor::new(fs::read(asset_root.join(written)).unwrap()))
+            .expect("cached tile should remain TIFF-decodable");
+        let (width, height) = decoder.dimensions().unwrap();
+        assert_eq!(width, request.attachment_config.texture_size);
+        assert_eq!(height, request.attachment_config.texture_size);
+        match decoder.read_image().unwrap() {
+            DecodingResult::F32(values) => assert!(!values.is_empty()),
+            other => panic!("expected F32 TIFF payload, got {other:?}"),
+        }
+
+        fs::remove_dir_all(asset_root).unwrap();
     }
 }

@@ -39,6 +39,7 @@ pub struct TerrainSettings {
     pub atlas_size: u32,
     pub upload_budget_bytes_per_frame: usize,
     pub streaming_cache_root: Option<String>,
+    pub streaming_target_lod_count: Option<u32>,
 }
 
 impl Default for TerrainSettings {
@@ -48,6 +49,7 @@ impl Default for TerrainSettings {
             atlas_size: 1028,
             upload_budget_bytes_per_frame: 24 * 1024 * 1024,
             streaming_cache_root: None,
+            streaming_target_lod_count: None,
         }
     }
 }
@@ -71,6 +73,7 @@ impl TerrainSettings {
             atlas_size: 1028,
             upload_budget_bytes_per_frame: 24 * 1024 * 1024,
             streaming_cache_root: None,
+            streaming_target_lod_count: None,
         }
     }
 
@@ -95,6 +98,14 @@ impl TerrainSettings {
     /// Prefer cached streamed tiles from an asset-relative root before the bundled starter data.
     pub fn with_streaming_cache_root<S: Into<String>>(mut self, streaming_cache_root: S) -> Self {
         self.streaming_cache_root = Some(streaming_cache_root.into());
+        self
+    }
+
+    /// Allow the runtime to request higher LODs than the bundled starter dataset contains.
+    /// This is primarily for online cache-fill scenarios where missing child tiles can be
+    /// streamed and cached while the renderer falls back to parent LODs meanwhile.
+    pub fn with_streaming_target_lod_count(mut self, lod_count: u32) -> Self {
+        self.streaming_target_lod_count = Some(lod_count);
         self
     }
 }
