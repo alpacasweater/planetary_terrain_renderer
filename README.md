@@ -217,6 +217,7 @@ GPU capture (macOS, `metal_capture` feature):
 
 - [Optimization and tasking plan](docs/agent-orchestration-plan-2026-03-07.md)
 - [Physical truth plan](docs/physical_truth_orchestration_plan_2026-03-07.md)
+- [Earth streaming and offline cache plan](docs/earth_streaming_orchestration_plan_2026-03-09.md)
 
 ## License
 
