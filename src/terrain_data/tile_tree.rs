@@ -1,5 +1,6 @@
 use crate::{
     math::{Coordinate, TerrainShape, TileCoordinate},
+    plugin::TerrainSettings,
     perf::{PHASE_MAIN_UPDATE_TERRAIN_VIEW_BUFFER, TerrainPerfTelemetry},
     render::{TerrainViewUniform, TileTreeUniform},
     terrain::TerrainConfig,
@@ -151,13 +152,15 @@ impl TileTree {
     pub fn new(
         config: &TerrainConfig,
         view_config: &TerrainViewConfig,
+        settings: &TerrainSettings,
         terrain_view: (Entity, Entity),
         commands: &mut Commands,
         buffers: &mut Assets<ShaderStorageBuffer>, // Todo: solve this dependency with a component hook in the future
     ) -> Self {
+        let lod_count = settings.effective_terrain_lod_count(config.lod_count);
         let data = Array4::default((
             config.shape.face_count() as usize,
-            config.lod_count as usize,
+            lod_count as usize,
             view_config.tree_size as usize,
             view_config.tree_size as usize,
         ));
@@ -186,7 +189,7 @@ impl TileTree {
 
         Self {
             tree_size: view_config.tree_size,
-            lod_count: config.lod_count,
+            lod_count,
             shape: config.shape,
             geometry_tile_count: view_config.geometry_tile_count,
             refinement_count: view_config.refinement_count,
@@ -209,7 +212,7 @@ impl TileTree {
             data,
             tiles: Array4::default((
                 config.shape.face_count() as usize,
-                config.lod_count as usize,
+                lod_count as usize,
                 view_config.tree_size as usize,
                 view_config.tree_size as usize,
             )),

@@ -31,6 +31,7 @@ Other built-in demos:
 ```bash
 cargo run --example spherical
 MULTIRES_OVERLAYS=none cargo run --example spherical_multires
+cargo run --example streaming_warmup_globe
 ```
 
 ## Build Your First Dataset
@@ -101,6 +102,19 @@ OPENTOPOGRAPHY_API_KEY=your-key \
 TERRAIN_STREAM_HEIGHT=1 \
 cargo run --example minimal_globe
 ```
+
+If you want a demo that intentionally flies into a land target and warms the cache without manual camera input, use:
+
+```bash
+source ./.env.opentopography.local
+cargo run --example streaming_warmup_globe
+```
+
+Warmup demo notes:
+- it is intentionally online-first and writes into `assets/streaming_cache/` by default
+- if an OpenTopography key is present, it warms both imagery and height
+- `STREAM_WARMUP_EXIT_AFTER_SECONDS=45` makes it useful for repeatable cache-warm runs
+- `STREAM_WARMUP_TARGET_LAT` and `STREAM_WARMUP_TARGET_LON` let you retarget the fly-in
 
 Height-streaming notes:
 - `TERRAIN_STREAM_HEIGHT=1` also enables online imagery

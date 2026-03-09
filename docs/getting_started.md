@@ -46,6 +46,18 @@ Current height limits:
 - this is an ellipsoidal ALOS World 3D source, which keeps the height semantics closer to the renderer's WGS84 model
 - unsupported regions fall back to the bundled starter Earth height
 
+If you want an automated fly-in instead of manual camera movement, use the dedicated warmup demo:
+
+```bash
+source ./.env.opentopography.local
+cargo run --example streaming_warmup_globe
+```
+
+Useful warmup overrides:
+- `STREAM_WARMUP_EXIT_AFTER_SECONDS=45` for repeatable warmup runs
+- `STREAM_WARMUP_TARGET_LAT` and `STREAM_WARMUP_TARGET_LON` to retarget the scripted descent
+- `TERRAIN_STREAMING_MAX_LOD=7` if you want a deeper refinement ceiling than the default
+
 ## 2. Preprocess a Dataset Without Downloading Anything
 
 The repo also includes tiny tutorial rasters in `sample_data/`.

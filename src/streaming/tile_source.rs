@@ -144,7 +144,7 @@ mod tests {
         assert_eq!(resolved.asset_path, cache_tile);
         assert_eq!(resolved.source_kind, LocalTileSourceKind::StreamingCache);
 
-        fs::remove_dir_all(asset_root).unwrap();
+        let _ = fs::remove_dir_all(asset_root);
     }
 
     #[test]
@@ -171,7 +171,7 @@ mod tests {
         assert_eq!(resolved.asset_path, starter_tile);
         assert_eq!(resolved.source_kind, LocalTileSourceKind::StarterDataset);
 
-        fs::remove_dir_all(asset_root).unwrap();
+        let _ = fs::remove_dir_all(asset_root);
     }
 
     #[test]
@@ -190,6 +190,6 @@ mod tests {
         );
         assert!(resolver.resolve_present_tile(&request).is_none());
 
-        fs::remove_dir_all(asset_root).unwrap();
+        let _ = fs::remove_dir_all(asset_root);
     }
 }

@@ -108,6 +108,12 @@ impl TerrainSettings {
         self.streaming_target_lod_count = Some(lod_count);
         self
     }
+
+    pub fn effective_terrain_lod_count(&self, config_lod_count: u32) -> u32 {
+        self.streaming_target_lod_count
+            .map(|override_lod| override_lod.max(config_lod_count))
+            .unwrap_or(config_lod_count)
+    }
 }
 
 /// The plugin for the terrain renderer.

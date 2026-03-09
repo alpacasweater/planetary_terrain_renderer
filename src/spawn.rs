@@ -74,6 +74,7 @@ pub(crate) fn spawn_terrains<M: Material>(
                     TileTree::new(
                         &config,
                         &view_config,
+                        &settings,
                         (terrain, view),
                         &mut commands,
                         &mut buffers,

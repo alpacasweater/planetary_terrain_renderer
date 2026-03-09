@@ -228,10 +228,7 @@ impl TileAtlas {
             RenderAssetUsages::all(),
         ));
         let terrain_path = normalize_terrain_asset_path(&config.path);
-        let lod_count = settings
-            .streaming_target_lod_count
-            .map(|override_lod| override_lod.max(config.lod_count))
-            .unwrap_or(config.lod_count);
+        let lod_count = settings.effective_terrain_lod_count(config.lod_count);
 
         Self {
             attachments,
@@ -424,6 +421,11 @@ impl TileAtlas {
 
     fn release_tile(&mut self, tile_coordinate: TileCoordinate) {
         if !self.is_tile_available(tile_coordinate) {
+            return;
+        }
+
+        if !self.tile_states.contains_key(&tile_coordinate) {
+            self.to_stream.retain(|tile| tile.coordinate != tile_coordinate);
             return;
         }
 
