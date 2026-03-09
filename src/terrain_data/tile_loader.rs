@@ -1,6 +1,6 @@
 use crate::{
     plugin::TerrainSettings,
-    streaming::{CacheFirstLocalTileSource, LocalTileRequest, LocalTileSource},
+    streaming::{CacheFirstLocalTileSource, LocalTileRequest},
     terrain_data::{AttachmentData, AttachmentFormat, AttachmentTile, TileAtlas},
 };
 use bevy::{
@@ -97,6 +97,7 @@ impl DefaultLoader {
 
                 false
             } else if asset_server.load_state(tile.handle.id()).is_failed() {
+                atlas.tile_failed(tile.tile.clone());
                 return false;
             } else {
                 true
@@ -131,11 +132,12 @@ impl DefaultLoader {
                     attachment_label: tile.label.clone(),
                     coordinate: tile.coordinate,
                 };
-                let Some(resolved_tile) = tile_source.resolve_tile(&request) else {
+                let Some(resolved_tile) = tile_source.resolve_present_tile(&request) else {
                     debug!(
                         "No local tile found for {:?} attachment {:?}",
                         tile.coordinate, tile.label
                     );
+                    atlas.tile_failed(tile.clone());
                     continue;
                 };
                 let source_kind = resolved_tile.source_kind;
@@ -145,6 +147,7 @@ impl DefaultLoader {
                     tile,
                     format: attachment.format,
                 });
+                atlas.note_attachment_load_started(source_kind);
                 debug!("Queued {:?} from {:?}", tile_coordinate, source_kind);
                 *inflight_counts.entry(tile_coordinate).or_insert(0) += 1;
                 atlas.note_inflight_attachment_loads(self.loading_tiles.len());

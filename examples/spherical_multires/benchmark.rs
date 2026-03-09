@@ -243,6 +243,11 @@ fn compute_summary(
     for counters in tile_atlas_perf_counters {
         perf.tile_requests_total += counters.tile_requests_total;
         perf.tile_releases_total += counters.tile_releases_total;
+        perf.started_attachment_loads_total += counters.started_attachment_loads_total;
+        perf.cache_resolved_attachment_loads_total +=
+            counters.cache_resolved_attachment_loads_total;
+        perf.starter_resolved_attachment_loads_total +=
+            counters.starter_resolved_attachment_loads_total;
         perf.canceled_pending_attachment_loads_total +=
             counters.canceled_pending_attachment_loads_total;
         perf.canceled_inflight_attachment_loads_total +=
@@ -250,6 +255,7 @@ fn compute_summary(
         perf.canceled_stale_upload_attachment_tiles_total +=
             counters.canceled_stale_upload_attachment_tiles_total;
         perf.finished_attachment_loads_total += counters.finished_attachment_loads_total;
+        perf.failed_attachment_loads_total += counters.failed_attachment_loads_total;
         perf.upload_enqueued_attachment_tiles_total +=
             counters.upload_enqueued_attachment_tiles_total;
         perf.upload_enqueued_bytes_total += counters.upload_enqueued_bytes_total;
@@ -328,9 +334,13 @@ fn compute_summary(
         tile_tree_buffer_skipped_total: tile_tree_perf.tile_tree_buffer_skipped_total,
         tile_requests_total: perf.tile_requests_total,
         tile_releases_total: perf.tile_releases_total,
+        started_attachment_loads_total: perf.started_attachment_loads_total,
+        cache_resolved_attachment_loads_total: perf.cache_resolved_attachment_loads_total,
+        starter_resolved_attachment_loads_total: perf.starter_resolved_attachment_loads_total,
         canceled_pending_attachment_loads_total: perf.canceled_pending_attachment_loads_total,
         canceled_inflight_attachment_loads_total: perf.canceled_inflight_attachment_loads_total,
         finished_attachment_loads_total: perf.finished_attachment_loads_total,
+        failed_attachment_loads_total: perf.failed_attachment_loads_total,
         upload_enqueued_attachment_tiles_total: perf.upload_enqueued_attachment_tiles_total,
         upload_enqueued_bytes_total: perf.upload_enqueued_bytes_total,
         upload_deferred_attachment_tiles_total: perf.upload_deferred_attachment_tiles_total,
@@ -412,9 +422,13 @@ fn write_benchmark_outputs(
             "  \"tile_tree_buffer_skipped_total\": {tile_tree_buffer_skipped_total},\n",
             "  \"tile_requests_total\": {tile_requests_total},\n",
             "  \"tile_releases_total\": {tile_releases_total},\n",
+            "  \"started_attachment_loads_total\": {started_attachment_loads_total},\n",
+            "  \"cache_resolved_attachment_loads_total\": {cache_resolved_attachment_loads_total},\n",
+            "  \"starter_resolved_attachment_loads_total\": {starter_resolved_attachment_loads_total},\n",
             "  \"canceled_pending_attachment_loads_total\": {canceled_pending_attachment_loads_total},\n",
             "  \"canceled_inflight_attachment_loads_total\": {canceled_inflight_attachment_loads_total},\n",
             "  \"finished_attachment_loads_total\": {finished_attachment_loads_total},\n",
+            "  \"failed_attachment_loads_total\": {failed_attachment_loads_total},\n",
             "  \"upload_enqueued_attachment_tiles_total\": {upload_enqueued_attachment_tiles_total},\n",
             "  \"upload_enqueued_bytes_total\": {upload_enqueued_bytes_total},\n",
             "  \"upload_deferred_attachment_tiles_total\": {upload_deferred_attachment_tiles_total},\n",
@@ -473,9 +487,13 @@ fn write_benchmark_outputs(
         tile_tree_buffer_skipped_total = summary.tile_tree_buffer_skipped_total,
         tile_requests_total = summary.tile_requests_total,
         tile_releases_total = summary.tile_releases_total,
+        started_attachment_loads_total = summary.started_attachment_loads_total,
+        cache_resolved_attachment_loads_total = summary.cache_resolved_attachment_loads_total,
+        starter_resolved_attachment_loads_total = summary.starter_resolved_attachment_loads_total,
         canceled_pending_attachment_loads_total = summary.canceled_pending_attachment_loads_total,
         canceled_inflight_attachment_loads_total = summary.canceled_inflight_attachment_loads_total,
         finished_attachment_loads_total = summary.finished_attachment_loads_total,
+        failed_attachment_loads_total = summary.failed_attachment_loads_total,
         upload_enqueued_attachment_tiles_total = summary.upload_enqueued_attachment_tiles_total,
         upload_enqueued_bytes_total = summary.upload_enqueued_bytes_total,
         upload_deferred_attachment_tiles_total = summary.upload_deferred_attachment_tiles_total,
@@ -497,15 +515,17 @@ fn write_benchmark_outputs(
             "fps_mean,frame_ms_mean,frame_ms_min,frame_ms_p50,frame_ms_p90,frame_ms_p95,frame_ms_p99,frame_ms_max,frame_over_25ms_count,frame_over_33ms_count,frame_over_50ms_count,latency_estimate_ms,peak_rss_kib,msaa_samples,benchmark_sweep_deg,benchmark_sweep_period_s,drone_enabled,terrain_lighting_enabled,terrain_morph_enabled,terrain_blend_enabled,terrain_sample_grad_enabled,terrain_high_precision_enabled,",
             "hottest_phase_name,hottest_phase_mean_ms,hottest_phase_p95_ms,hottest_phase_max_ms,",
             "upload_budget_bytes_per_frame,terrain_view_buffer_updates_total,tile_tree_buffer_updates_total,tile_tree_buffer_skipped_total,",
-            "tile_requests_total,tile_releases_total,canceled_pending_attachment_loads_total,canceled_inflight_attachment_loads_total,",
-            "finished_attachment_loads_total,upload_enqueued_attachment_tiles_total,upload_enqueued_bytes_total,upload_deferred_attachment_tiles_total,",
+            "tile_requests_total,tile_releases_total,started_attachment_loads_total,cache_resolved_attachment_loads_total,starter_resolved_attachment_loads_total,",
+            "canceled_pending_attachment_loads_total,canceled_inflight_attachment_loads_total,finished_attachment_loads_total,failed_attachment_loads_total,",
+            "upload_enqueued_attachment_tiles_total,upload_enqueued_bytes_total,upload_deferred_attachment_tiles_total,",
             "peak_pending_attachment_queue,peak_inflight_attachment_loads,peak_upload_backlog_attachment_tiles,canceled_stale_upload_attachment_tiles_total\n",
             "\"{scenario_name}\",\"{overlays_csv}\",\"{present_mode}\",\"{focus_label}\",{focus_lat_deg:.6},{focus_lon_deg:.6},{benchmark_mode},{debug_tools_enabled},{perf_title_enabled},{warmup_s:.3},{duration_s:.3},{sample_count},{ready_wait_s:.3},",
             "{ready_atlas_count},{ready_loaded_atlas_count},{ready_loaded_tile_total},",
             "{fps_mean:.6},{frame_ms_mean:.6},{frame_ms_min:.6},{frame_ms_p50:.6},{frame_ms_p90:.6},{frame_ms_p95:.6},{frame_ms_p99:.6},{frame_ms_max:.6},{frame_over_25ms_count},{frame_over_33ms_count},{frame_over_50ms_count},{latency_estimate_ms:.6},{peak_rss_kib},{msaa_samples},{benchmark_sweep_deg:.3},{benchmark_sweep_period_s:.3},{drone_enabled},{terrain_lighting_enabled},{terrain_morph_enabled},{terrain_blend_enabled},{terrain_sample_grad_enabled},{terrain_high_precision_enabled},\"{hottest_phase_name}\",{hottest_phase_mean_ms:.6},{hottest_phase_p95_ms:.6},{hottest_phase_max_ms:.6},",
             "{upload_budget_bytes_per_frame},{terrain_view_buffer_updates_total},{tile_tree_buffer_updates_total},{tile_tree_buffer_skipped_total},",
-            "{tile_requests_total},{tile_releases_total},{canceled_pending_attachment_loads_total},{canceled_inflight_attachment_loads_total},",
-            "{finished_attachment_loads_total},{upload_enqueued_attachment_tiles_total},{upload_enqueued_bytes_total},{upload_deferred_attachment_tiles_total},",
+            "{tile_requests_total},{tile_releases_total},{started_attachment_loads_total},{cache_resolved_attachment_loads_total},{starter_resolved_attachment_loads_total},",
+            "{canceled_pending_attachment_loads_total},{canceled_inflight_attachment_loads_total},{finished_attachment_loads_total},{failed_attachment_loads_total},",
+            "{upload_enqueued_attachment_tiles_total},{upload_enqueued_bytes_total},{upload_deferred_attachment_tiles_total},",
             "{peak_pending_attachment_queue},{peak_inflight_attachment_loads},{peak_upload_backlog_attachment_tiles},{canceled_stale_upload_attachment_tiles_total}\n"
         ),
         scenario_name = scenario_name,
@@ -556,9 +576,13 @@ fn write_benchmark_outputs(
         tile_tree_buffer_skipped_total = summary.tile_tree_buffer_skipped_total,
         tile_requests_total = summary.tile_requests_total,
         tile_releases_total = summary.tile_releases_total,
+        started_attachment_loads_total = summary.started_attachment_loads_total,
+        cache_resolved_attachment_loads_total = summary.cache_resolved_attachment_loads_total,
+        starter_resolved_attachment_loads_total = summary.starter_resolved_attachment_loads_total,
         canceled_pending_attachment_loads_total = summary.canceled_pending_attachment_loads_total,
         canceled_inflight_attachment_loads_total = summary.canceled_inflight_attachment_loads_total,
         finished_attachment_loads_total = summary.finished_attachment_loads_total,
+        failed_attachment_loads_total = summary.failed_attachment_loads_total,
         upload_enqueued_attachment_tiles_total = summary.upload_enqueued_attachment_tiles_total,
         upload_enqueued_bytes_total = summary.upload_enqueued_bytes_total,
         upload_deferred_attachment_tiles_total = summary.upload_deferred_attachment_tiles_total,

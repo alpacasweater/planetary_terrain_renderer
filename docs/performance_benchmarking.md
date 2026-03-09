@@ -51,9 +51,13 @@ Metrics include:
 - `tile_tree_buffer_skipped_total`
 - `tile_requests_total`
 - `tile_releases_total`
+- `started_attachment_loads_total`
+- `cache_resolved_attachment_loads_total`
+- `starter_resolved_attachment_loads_total`
 - `canceled_pending_attachment_loads_total`
 - `canceled_inflight_attachment_loads_total`
 - `finished_attachment_loads_total`
+- `failed_attachment_loads_total`
 - `upload_enqueued_attachment_tiles_total`
 - `upload_enqueued_bytes_total`
 - `upload_deferred_attachment_tiles_total`

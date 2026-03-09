@@ -16,6 +16,7 @@ cargo run --example minimal_globe
 
 This launches the smallest demo intended for copying into your own app.
 The source is [examples/minimal_globe.rs](../examples/minimal_globe.rs).
+If you later add a streamed cache, keep the same example and set `TERRAIN_STREAMING_CACHE_ROOT=streaming_cache` to prefer cached tiles before the bundled starter data.
 
 ## 2. Preprocess a Dataset Without Downloading Anything
 
@@ -139,4 +140,5 @@ Those larger source files are intentionally not committed.
 - If Windows preprocessing fails during the Rust build, check `GDAL_HOME` first.
 - If you only want a visible globe, do not start with the preprocess pipeline.
 - `cargo run --example minimal_globe` uses the bundled Earth by default. Pass a different terrain root as the first argument when you want to inspect another dataset.
+- `TERRAIN_STREAMING_CACHE_ROOT` must be asset-relative. Use `streaming_cache`, not an absolute filesystem path.
 - The preprocess CLI currently forces `GDAL_NUM_THREADS=1`. That is intentional until the custom transformer is safely cloneable across GDAL worker threads.

@@ -5,6 +5,7 @@ use std::{env, path::PathBuf};
 
 const RADIUS: f64 = 6_371_000.0;
 const DEFAULT_TERRAIN_ROOT: &str = "terrains/earth";
+const STREAMING_CACHE_ROOT_ENV: &str = "TERRAIN_STREAMING_CACHE_ROOT";
 
 fn main() {
     App::new()
@@ -24,9 +25,17 @@ fn main() {
             SimpleTerrainMaterialPlugin,
             TerrainDebugPlugin,
         ))
-        .insert_resource(TerrainSettings::with_albedo())
+        .insert_resource(terrain_settings_from_env())
         .add_systems(Startup, setup)
         .run();
+}
+
+fn terrain_settings_from_env() -> TerrainSettings {
+    let settings = TerrainSettings::with_albedo();
+    match env::var(STREAMING_CACHE_ROOT_ENV) {
+        Ok(root) if !root.trim().is_empty() => settings.with_streaming_cache_root(root),
+        _ => settings,
+    }
 }
 
 fn setup(

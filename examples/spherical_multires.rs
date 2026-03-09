@@ -79,6 +79,7 @@ const TERRAIN_MORPH_ENV: &str = "MULTIRES_TERRAIN_MORPH";
 const TERRAIN_BLEND_ENV: &str = "MULTIRES_TERRAIN_BLEND";
 const TERRAIN_SAMPLE_GRAD_ENV: &str = "MULTIRES_TERRAIN_SAMPLE_GRAD";
 const TERRAIN_HIGH_PRECISION_ENV: &str = "MULTIRES_TERRAIN_HIGH_PRECISION";
+const STREAMING_CACHE_ROOT_ENV: &str = "TERRAIN_STREAMING_CACHE_ROOT";
 const ENABLE_DRONE_ENV: &str = "MULTIRES_ENABLE_DRONE";
 const DRONE_AGL_ENV: &str = "MULTIRES_DRONE_AGL_M";
 const DRONE_RADIUS_ENV: &str = "MULTIRES_DRONE_ORBIT_RADIUS_M";
@@ -276,9 +277,13 @@ struct BenchmarkSummary {
     tile_tree_buffer_skipped_total: u64,
     tile_requests_total: u64,
     tile_releases_total: u64,
+    started_attachment_loads_total: u64,
+    cache_resolved_attachment_loads_total: u64,
+    starter_resolved_attachment_loads_total: u64,
     canceled_pending_attachment_loads_total: u64,
     canceled_inflight_attachment_loads_total: u64,
     finished_attachment_loads_total: u64,
+    failed_attachment_loads_total: u64,
     upload_enqueued_attachment_tiles_total: u64,
     upload_enqueued_bytes_total: u64,
     upload_deferred_attachment_tiles_total: u64,
@@ -346,32 +351,29 @@ fn main() {
         app.add_plugins(MetalCapturePlugin);
     }
 
-    app.insert_resource(
-        TerrainSettings::with_albedo()
-            .with_upload_budget_bytes_per_frame(upload_budget_bytes_per_frame),
-    )
-    .insert_resource(RuntimeMode {
-        benchmark_mode,
-        debug_tools_enabled,
-        click_readout_enabled,
-        perf_title_enabled,
-    })
-    .insert_resource(ClickReadoutState::default())
-    .insert_resource(PerfTitleState::default())
-    .init_resource::<LoadingImages>()
-    .add_systems(Startup, initialize)
-    .add_systems(
-        Update,
-        (
-            animate_benchmark_camera,
-            animate_demo_drone,
-            inspect_clicked_terrain_point,
-            copy_click_readout_to_clipboard,
-            update_click_readout_ui,
-            capture_benchmark_frames,
-            run_benchmark,
-        ),
-    );
+    app.insert_resource(terrain_settings_from_env(upload_budget_bytes_per_frame))
+        .insert_resource(RuntimeMode {
+            benchmark_mode,
+            debug_tools_enabled,
+            click_readout_enabled,
+            perf_title_enabled,
+        })
+        .insert_resource(ClickReadoutState::default())
+        .insert_resource(PerfTitleState::default())
+        .init_resource::<LoadingImages>()
+        .add_systems(Startup, initialize)
+        .add_systems(
+            Update,
+            (
+                animate_benchmark_camera,
+                animate_demo_drone,
+                inspect_clicked_terrain_point,
+                copy_click_readout_to_clipboard,
+                update_click_readout_ui,
+                capture_benchmark_frames,
+                run_benchmark,
+            ),
+        );
     #[cfg(feature = "metal_capture")]
     if let Some(config) = metal_capture_config_from_env() {
         app.insert_resource(config)
@@ -396,4 +398,13 @@ fn asset_exists(asset_path: &str) -> bool {
 fn asset_dir_exists(asset_path: &str) -> bool {
     let fs_path = format!("assets/{asset_path}");
     Path::new(&fs_path).is_dir()
+}
+
+fn terrain_settings_from_env(upload_budget_bytes_per_frame: usize) -> TerrainSettings {
+    let settings = TerrainSettings::with_albedo()
+        .with_upload_budget_bytes_per_frame(upload_budget_bytes_per_frame);
+    match env::var(STREAMING_CACHE_ROOT_ENV) {
+        Ok(root) if !root.trim().is_empty() => settings.with_streaming_cache_root(root),
+        _ => settings,
+    }
 }

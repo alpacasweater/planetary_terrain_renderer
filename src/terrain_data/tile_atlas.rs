@@ -1,11 +1,10 @@
 use crate::{
     math::{TerrainShape, TileCoordinate},
-    perf::{
-        PHASE_MAIN_TILE_ATLAS_UPDATE, PHASE_MAIN_UPDATE_TERRAIN_BUFFER, TerrainPerfTelemetry,
-    },
+    perf::{PHASE_MAIN_TILE_ATLAS_UPDATE, PHASE_MAIN_UPDATE_TERRAIN_BUFFER, TerrainPerfTelemetry},
     plugin::TerrainSettings,
     render::TerrainUniform,
-    terrain::{CURRENT_GEODETIC_MAPPING_VERSION, TerrainConfig},
+    streaming::{CacheFirstLocalTileSource, LocalTileRequest, LocalTileSourceKind},
+    terrain::{CURRENT_GEODETIC_MAPPING_VERSION, TerrainConfig, TileAvailability},
     terrain_data::{
         Attachment, AttachmentData, AttachmentLabel, AttachmentTile, AttachmentTileWithData,
         DefaultLoader, TileTree, TileTreeEntry,
@@ -21,8 +20,8 @@ use bevy::{
     tasks::Task,
 };
 use big_space::prelude::CellCoord;
-use std::collections::VecDeque;
 use std::time::Instant;
+use std::{collections::VecDeque, path::PathBuf};
 
 /// The current state of a tile of a [`TileAtlas`].
 ///
@@ -51,10 +50,14 @@ struct TileState {
 pub struct TileAtlasPerfCounters {
     pub tile_requests_total: u64,
     pub tile_releases_total: u64,
+    pub started_attachment_loads_total: u64,
+    pub cache_resolved_attachment_loads_total: u64,
+    pub starter_resolved_attachment_loads_total: u64,
     pub canceled_pending_attachment_loads_total: u64,
     pub canceled_inflight_attachment_loads_total: u64,
     pub canceled_stale_upload_attachment_tiles_total: u64,
     pub finished_attachment_loads_total: u64,
+    pub failed_attachment_loads_total: u64,
     pub upload_enqueued_attachment_tiles_total: u64,
     pub upload_enqueued_bytes_total: u64,
     pub upload_deferred_attachment_tiles_total: u64,
@@ -85,7 +88,10 @@ pub struct TileAtlas {
     pub(crate) attachments: HashMap<AttachmentLabel, Attachment>, // stores the attachment data
     tile_states: HashMap<TileCoordinate, TileState>,
     unused_indices: VecDeque<u32>,
-    existing_tiles: HashSet<TileCoordinate>,
+    explicit_tiles: HashSet<TileCoordinate>,
+    tile_availability: TileAvailability,
+    terrain_path: String,
+    streaming_cache_root: Option<PathBuf>,
     pub(crate) uploading_tiles: Vec<AttachmentTileWithData>,
     pub(crate) downloading_tiles: Vec<Task<AttachmentTileWithData>>,
     pub(crate) to_load: Vec<AttachmentTile>,
@@ -114,7 +120,8 @@ impl TileAtlas {
     }
 
     pub fn existing_tile_count(&self) -> usize {
-        self.existing_tiles.len()
+        self.tile_availability
+            .tile_count(self.shape, self.lod_count, self.explicit_tiles.len())
     }
 
     pub fn perf_counters(&self) -> TileAtlasPerfCounters {
@@ -150,6 +157,18 @@ impl TileAtlas {
             self.perf_counters.peak_inflight_attachment_loads.max(count);
     }
 
+    pub(crate) fn note_attachment_load_started(&mut self, source_kind: LocalTileSourceKind) {
+        self.perf_counters.started_attachment_loads_total += 1;
+        match source_kind {
+            LocalTileSourceKind::StreamingCache => {
+                self.perf_counters.cache_resolved_attachment_loads_total += 1;
+            }
+            LocalTileSourceKind::StarterDataset => {
+                self.perf_counters.starter_resolved_attachment_loads_total += 1;
+            }
+        }
+    }
+
     pub(crate) fn note_canceled_inflight_attachment_loads(&mut self, count: u64) {
         self.perf_counters.canceled_inflight_attachment_loads_total += count;
     }
@@ -167,7 +186,8 @@ impl TileAtlas {
     }
 
     pub(crate) fn note_canceled_stale_upload_attachment_tiles(&mut self, count: usize) {
-        self.perf_counters.canceled_stale_upload_attachment_tiles_total += count as u64;
+        self.perf_counters
+            .canceled_stale_upload_attachment_tiles_total += count as u64;
     }
 
     pub(crate) fn is_upload_tile_relevant(
@@ -190,9 +210,7 @@ impl TileAtlas {
         if config.geodetic_mapping_version < CURRENT_GEODETIC_MAPPING_VERSION {
             warn!(
                 "Terrain config '{}' uses geodetic_mapping_version={} but the renderer expects {}. Reprocess this terrain to remove stale pre-2026-03-07 mapping semantics.",
-                config.path,
-                config.geodetic_mapping_version,
-                CURRENT_GEODETIC_MAPPING_VERSION
+                config.path, config.geodetic_mapping_version, CURRENT_GEODETIC_MAPPING_VERSION
             );
         }
 
@@ -206,12 +224,16 @@ impl TileAtlas {
             TerrainUniform::min_size().get() as usize,
             RenderAssetUsages::all(),
         ));
+        let terrain_path = normalize_terrain_asset_path(&config.path);
 
         Self {
             attachments,
             tile_states: default(),
             unused_indices: (0..settings.atlas_size).collect(),
-            existing_tiles: HashSet::from_iter(config.tiles.clone()),
+            explicit_tiles: HashSet::from_iter(config.tiles.clone()),
+            tile_availability: config.tile_availability,
+            terrain_path,
+            streaming_cache_root: settings.streaming_cache_root.as_ref().map(PathBuf::from),
             to_load: default(),
             uploading_tiles: default(),
             downloading_tiles: default(),
@@ -229,7 +251,7 @@ impl TileAtlas {
     pub(crate) fn get_best_tile(&self, tile_coordinate: TileCoordinate) -> TileTreeEntry {
         let mut best_tile_coordinate = tile_coordinate;
 
-        if !self.existing_tiles.contains(&tile_coordinate) {
+        if !self.is_tile_available(tile_coordinate) {
             return TileTreeEntry::default();
         }
 
@@ -279,7 +301,20 @@ impl TileAtlas {
                 .peak_upload_backlog_attachment_tiles
                 .max(self.uploading_tiles.len());
         } else {
-            debug!("Tile finished loading after cancellation: {:?}", tile.coordinate);
+            debug!(
+                "Tile finished loading after cancellation: {:?}",
+                tile.coordinate
+            );
+        }
+    }
+
+    pub(crate) fn tile_failed(&mut self, tile: AttachmentTile) {
+        self.perf_counters.failed_attachment_loads_total += 1;
+        if self.cancel_loading_tile(tile.coordinate) {
+            debug!(
+                "Canceled {:?} after local attachment load failure.",
+                tile.coordinate
+            );
         }
     }
 
@@ -318,7 +353,7 @@ impl TileAtlas {
     }
 
     fn request_tile(&mut self, tile_coordinate: TileCoordinate) {
-        if !self.existing_tiles.contains(&tile_coordinate) {
+        if !self.is_tile_available(tile_coordinate) {
             return;
         }
 
@@ -337,6 +372,11 @@ impl TileAtlas {
 
             tile.requests += 1;
         } else {
+            // Keep the current runtime local-first until remote cache fill exists.
+            if !self.has_all_attachments_locally(tile_coordinate) {
+                return;
+            }
+
             let atlas_index = self
                 .unused_indices
                 .pop_front()
@@ -369,7 +409,7 @@ impl TileAtlas {
     }
 
     fn release_tile(&mut self, tile_coordinate: TileCoordinate) {
-        if !self.existing_tiles.contains(&tile_coordinate) {
+        if !self.is_tile_available(tile_coordinate) {
             return;
         }
 
@@ -387,17 +427,63 @@ impl TileAtlas {
 
         match state {
             LoadingState::Loading(_) => {
-                self.tile_states.remove(&tile_coordinate);
-                let pending_before = self.to_load.len();
-                self.to_load
-                    .retain(|tile| tile.coordinate != tile_coordinate);
-                self.perf_counters.canceled_pending_attachment_loads_total +=
-                    (pending_before - self.to_load.len()) as u64;
-                self.unused_indices.push_back(atlas_index);
+                let removed = self.cancel_loading_tile(tile_coordinate);
+                debug_assert!(removed, "loading tile should still be cancelable");
             }
             LoadingState::Loaded => {
                 self.unused_indices.push_back(atlas_index);
             }
         }
+    }
+
+    fn is_tile_available(&self, tile_coordinate: TileCoordinate) -> bool {
+        self.tile_availability
+            .contains(tile_coordinate, self.shape, self.lod_count, || {
+                self.explicit_tiles.contains(&tile_coordinate)
+            })
+    }
+
+    fn has_all_attachments_locally(&self, tile_coordinate: TileCoordinate) -> bool {
+        let tile_source = CacheFirstLocalTileSource::new(
+            PathBuf::from("assets"),
+            self.streaming_cache_root.clone(),
+        );
+
+        self.attachments.keys().all(|label| {
+            tile_source
+                .resolve_present_tile(&LocalTileRequest {
+                    terrain_path: self.terrain_path.clone(),
+                    attachment_label: label.clone(),
+                    coordinate: tile_coordinate,
+                })
+                .is_some()
+        })
+    }
+
+    fn cancel_loading_tile(&mut self, tile_coordinate: TileCoordinate) -> bool {
+        let Some(tile_state) = self.tile_states.remove(&tile_coordinate) else {
+            return false;
+        };
+
+        if !matches!(tile_state.state, LoadingState::Loading(_)) {
+            self.tile_states.insert(tile_coordinate, tile_state);
+            return false;
+        }
+
+        let pending_before = self.to_load.len();
+        self.to_load
+            .retain(|tile| tile.coordinate != tile_coordinate);
+        self.perf_counters.canceled_pending_attachment_loads_total +=
+            (pending_before - self.to_load.len()) as u64;
+        self.unused_indices.push_back(tile_state.atlas_index);
+        true
+    }
+}
+
+fn normalize_terrain_asset_path(path: &str) -> String {
+    if path.starts_with("assets/") {
+        path[7..].to_string()
+    } else {
+        path.to_string()
     }
 }

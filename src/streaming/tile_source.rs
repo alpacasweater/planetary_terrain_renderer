@@ -74,6 +74,17 @@ impl CacheFirstLocalTileSource {
             source_kind,
         })
     }
+
+    pub fn resolve_present_tile(&self, request: &LocalTileRequest) -> Option<ResolvedLocalTile> {
+        self.resolve_cache_tile(request).or_else(|| {
+            let asset_path = starter_tile_asset_path(
+                &request.terrain_path,
+                &request.attachment_label,
+                request.coordinate,
+            );
+            self.file_if_exists(asset_path, LocalTileSourceKind::StarterDataset)
+        })
+    }
 }
 
 impl LocalTileSource for CacheFirstLocalTileSource {
@@ -159,6 +170,25 @@ mod tests {
         let resolved = resolver.resolve_tile(&request).unwrap();
         assert_eq!(resolved.asset_path, starter_tile);
         assert_eq!(resolved.source_kind, LocalTileSourceKind::StarterDataset);
+
+        fs::remove_dir_all(asset_root).unwrap();
+    }
+
+    #[test]
+    fn present_tile_resolution_requires_a_real_file() {
+        let asset_root = unique_temp_dir();
+        fs::create_dir_all(&asset_root).unwrap();
+        let request = LocalTileRequest {
+            terrain_path: "terrains/earth".to_string(),
+            attachment_label: AttachmentLabel::Height,
+            coordinate: crate::math::TileCoordinate::new(0, 0, IVec2::ZERO),
+        };
+
+        let resolver = CacheFirstLocalTileSource::new(
+            asset_root.clone(),
+            Some(PathBuf::from("streaming_cache")),
+        );
+        assert!(resolver.resolve_present_tile(&request).is_none());
 
         fs::remove_dir_all(asset_root).unwrap();
     }

@@ -25,6 +25,7 @@
             format: Rgb8U,
         ),
     },
+    tile_availability: FullFace,
     tiles: [
         (
             face: 2,

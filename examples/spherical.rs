@@ -1,11 +1,12 @@
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
 use bevy_terrain::prelude::*;
-use std::path::Path;
+use std::{env, path::Path};
 
 const RADIUS: f64 = 6_371_000.0;
 const EARTH_CONFIG_PATH: &str = "assets/terrains/earth/config.tc.ron";
 const EARTH_ASSET_PATH: &str = "terrains/earth";
+const STREAMING_CACHE_ROOT_ENV: &str = "TERRAIN_STREAMING_CACHE_ROOT";
 
 fn main() {
     App::new()
@@ -25,9 +26,17 @@ fn main() {
             TerrainDebugPlugin,
             TerrainPickingPlugin,
         ))
-        .insert_resource(TerrainSettings::with_albedo())
+        .insert_resource(terrain_settings_from_env())
         .add_systems(Startup, initialize)
         .run();
+}
+
+fn terrain_settings_from_env() -> TerrainSettings {
+    let settings = TerrainSettings::with_albedo();
+    match env::var(STREAMING_CACHE_ROOT_ENV) {
+        Ok(root) if !root.trim().is_empty() => settings.with_streaming_cache_root(root),
+        _ => settings,
+    }
 }
 
 fn initialize(

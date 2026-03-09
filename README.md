@@ -23,6 +23,7 @@ What this gives you:
 - height plus albedo out of the box
 - the smallest copyable example in [examples/minimal_globe.rs](examples/minimal_globe.rs)
 - no GDAL setup unless you want to preprocess your own data
+- optional cache-first terrain reads when `TERRAIN_STREAMING_CACHE_ROOT` points at an asset-relative cache root such as `streaming_cache`
 
 Other built-in demos:
 
@@ -69,6 +70,7 @@ It accepts an optional terrain root argument, so the same example works for both
 ```bash
 cargo run --example minimal_globe
 cargo run --example minimal_globe -- terrains/tutorial_earth
+TERRAIN_STREAMING_CACHE_ROOT=streaming_cache cargo run --example minimal_globe
 ```
 
 ## Cross-Platform Preprocessing Setup
