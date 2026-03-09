@@ -126,6 +126,7 @@ Define the cache schema and provider contract that Tier 2 online backends must i
 
 ### Primary files
 - `docs/earth_streaming_orchestration_plan_2026-03-09.md`
+- `docs/earth_streaming_cache_contract_2026-03-09.md`
 - new schema docs under `docs/`
 - new source-contract modules under `src/streaming/`
 

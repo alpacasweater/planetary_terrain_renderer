@@ -33,6 +33,7 @@ pub struct TerrainSettings {
     pub attachments: Vec<AttachmentLabel>,
     pub atlas_size: u32,
     pub upload_budget_bytes_per_frame: usize,
+    pub streaming_cache_root: Option<String>,
 }
 
 impl Default for TerrainSettings {
@@ -41,6 +42,7 @@ impl Default for TerrainSettings {
             attachments: vec![AttachmentLabel::Height],
             atlas_size: 1028,
             upload_budget_bytes_per_frame: 24 * 1024 * 1024,
+            streaming_cache_root: None,
         }
     }
 }
@@ -63,6 +65,7 @@ impl TerrainSettings {
             attachments,
             atlas_size: 1028,
             upload_budget_bytes_per_frame: 24 * 1024 * 1024,
+            streaming_cache_root: None,
         }
     }
 
@@ -81,6 +84,12 @@ impl TerrainSettings {
         upload_budget_bytes_per_frame: usize,
     ) -> Self {
         self.upload_budget_bytes_per_frame = upload_budget_bytes_per_frame;
+        self
+    }
+
+    /// Prefer cached streamed tiles from an asset-relative root before the bundled starter data.
+    pub fn with_streaming_cache_root<S: Into<String>>(mut self, streaming_cache_root: S) -> Self {
+        self.streaming_cache_root = Some(streaming_cache_root.into());
         self
     }
 }

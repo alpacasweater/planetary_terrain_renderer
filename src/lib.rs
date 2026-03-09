@@ -64,6 +64,7 @@ pub mod render;
 pub mod shaders;
 pub mod simple;
 pub mod spawn;
+pub mod streaming;
 pub mod terrain;
 pub mod terrain_data;
 pub mod terrain_view;

@@ -1,4 +1,8 @@
-use crate::terrain_data::{AttachmentData, AttachmentFormat, AttachmentTile, TileAtlas};
+use crate::{
+    plugin::TerrainSettings,
+    streaming::{CacheFirstLocalTileSource, LocalTileRequest, LocalTileSource},
+    terrain_data::{AttachmentData, AttachmentFormat, AttachmentTile, TileAtlas},
+};
 use bevy::{
     asset::{AssetServer, Assets, Handle},
     image::Image,
@@ -101,24 +105,47 @@ impl DefaultLoader {
         atlas.note_inflight_attachment_loads(self.loading_tiles.len());
     }
 
-    fn start_loading(&mut self, atlas: &mut TileAtlas, asset_server: &mut AssetServer) {
+    fn start_loading(
+        &mut self,
+        atlas: &mut TileAtlas,
+        asset_server: &mut AssetServer,
+        settings: &TerrainSettings,
+    ) {
         self.cancel_stale(atlas);
         let mut inflight_counts = self.inflight_counts();
+        let tile_source = CacheFirstLocalTileSource::new(
+            std::path::PathBuf::from("assets"),
+            settings
+                .streaming_cache_root
+                .as_deref()
+                .map(std::path::PathBuf::from),
+        );
         while self.loading_tiles.len() < self.loading_tiles.capacity() {
             if let Some(index) = self.to_load_next(atlas, &inflight_counts) {
                 let tile = atlas.to_load.swap_remove(index);
                 let tile_coordinate = tile.coordinate;
                 let attachment = &atlas.attachments[&tile.label];
 
-                let path = tile
-                    .coordinate
-                    .path(&attachment.path.join(String::from(&tile.label)));
+                let request = LocalTileRequest {
+                    terrain_path: attachment.path.to_string_lossy().into_owned(),
+                    attachment_label: tile.label.clone(),
+                    coordinate: tile.coordinate,
+                };
+                let Some(resolved_tile) = tile_source.resolve_tile(&request) else {
+                    debug!(
+                        "No local tile found for {:?} attachment {:?}",
+                        tile.coordinate, tile.label
+                    );
+                    continue;
+                };
+                let source_kind = resolved_tile.source_kind;
 
                 self.loading_tiles.insert(LoadingTile {
-                    handle: asset_server.load(path),
+                    handle: asset_server.load(resolved_tile.asset_path),
                     tile,
                     format: attachment.format,
                 });
+                debug!("Queued {:?} from {:?}", tile_coordinate, source_kind);
                 *inflight_counts.entry(tile_coordinate).or_insert(0) += 1;
                 atlas.note_inflight_attachment_loads(self.loading_tiles.len());
             } else {
@@ -141,8 +168,9 @@ pub fn finish_loading(
 pub fn start_loading(
     mut terrains: Query<(&mut TileAtlas, &mut DefaultLoader)>,
     mut asset_server: ResMut<AssetServer>,
+    settings: Res<TerrainSettings>,
 ) {
     for (mut tile_atlas, mut loader) in &mut terrains {
-        loader.start_loading(&mut tile_atlas, &mut asset_server);
+        loader.start_loading(&mut tile_atlas, &mut asset_server, &settings);
     }
 }

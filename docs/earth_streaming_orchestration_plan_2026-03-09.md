@@ -125,6 +125,7 @@ Parallel objective: improve data quality and operational robustness after the fi
 
 ## Detailed Tier 1 Packet
 For the first implementation wave, use [Tier 1 Work Packets](earth_streaming_tier1_packets_2026-03-09.md) as the concrete handoff document for parallel execution.
+The shared cache/schema contract produced by `E3` is documented in [Earth Streaming Cache Contract](earth_streaming_cache_contract_2026-03-09.md).
 
 ## Recommended Initial Scope
 The first release target should be:
