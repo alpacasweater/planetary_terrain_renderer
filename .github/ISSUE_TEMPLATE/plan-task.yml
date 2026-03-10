@@ -1,0 +1,62 @@
+name: Plan Task
+description: Execute a bounded task from a tracked plan.
+title: "[Task] "
+labels:
+  - task
+body:
+  - type: input
+    id: parent
+    attributes:
+      label: Parent tracking issue
+      description: Link the tracker or umbrella issue for this work.
+      placeholder: "#123"
+    validations:
+      required: true
+  - type: input
+    id: task_id
+    attributes:
+      label: Task ID
+      description: Plan identifier for this task.
+      placeholder: T1-A / O3 / PT2
+    validations:
+      required: true
+  - type: input
+    id: plan_doc
+    attributes:
+      label: Plan document
+      description: Repo-relative path to the source plan document.
+      placeholder: docs/agent-orchestration-plan-2026-03-07.md
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Define the intended change and its ownership boundary.
+      placeholder: Summarize the change, owned files, and what is explicitly out of scope.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Exact conditions for closing this issue.
+      placeholder: List benchmark, correctness, build, or API gates.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation and artifacts
+      description: Commands, captures, docs, or benchmark artifacts required for signoff.
+      placeholder: List the commands or artifact paths needed for review.
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Context notes
+      description: Dependencies, branch guidance, skills, or current status from the plan.
+      placeholder: Add any plan-specific context that matters before work starts.
+    validations:
+      required: false
