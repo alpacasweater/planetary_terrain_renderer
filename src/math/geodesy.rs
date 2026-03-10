@@ -16,12 +16,12 @@ fn wgs84_renderer_scale() -> DVec3 {
 }
 
 #[inline(always)]
-fn renderer_local_from_ecef(ecef: DVec3) -> DVec3 {
+pub fn renderer_local_from_ecef(ecef: DVec3) -> DVec3 {
     DVec3::new(-ecef.x, ecef.z, ecef.y)
 }
 
 #[inline(always)]
-fn ecef_from_renderer_local(local: DVec3) -> DVec3 {
+pub fn ecef_from_renderer_local(local: DVec3) -> DVec3 {
     DVec3::new(-local.x, local.z, local.y)
 }
 
@@ -37,6 +37,13 @@ pub struct Ned {
     pub n_m: f64,
     pub e_m: f64,
     pub d_m: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Enu {
+    pub e_m: f64,
+    pub n_m: f64,
+    pub u_m: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -136,6 +143,11 @@ pub fn renderer_local_to_lla_hae(local: DVec3) -> LlaHae {
 }
 
 #[inline(always)]
+pub fn lla_to_renderer_local(lla: LlaHae) -> DVec3 {
+    renderer_local_from_ecef(lla_hae_to_ecef(lla))
+}
+
+#[inline(always)]
 pub fn ned_to_ecef(ned: Ned, origin: LlaHae) -> DVec3 {
     let cp = GeoConversionParams::from_origin(origin);
 
@@ -144,6 +156,33 @@ pub fn ned_to_ecef(ned: Ned, origin: LlaHae) -> DVec3 {
     let dz = cp.rot[0][2] * ned.n_m + cp.rot[1][2] * ned.e_m + cp.rot[2][2] * ned.d_m;
 
     DVec3::new(dx + cp.x0, dy + cp.y0, dz + cp.z0)
+}
+
+#[inline(always)]
+pub fn enu_to_ecef(enu: Enu, origin: LlaHae) -> DVec3 {
+    ned_to_ecef(
+        Ned {
+            n_m: enu.n_m,
+            e_m: enu.e_m,
+            d_m: -enu.u_m,
+        },
+        origin,
+    )
+}
+
+#[inline(always)]
+pub fn ned_to_renderer_local(ned: Ned, origin: LlaHae) -> DVec3 {
+    renderer_local_from_ecef(ned_to_ecef(ned, origin))
+}
+
+#[inline(always)]
+pub fn enu_to_renderer_local(enu: Enu, origin: LlaHae) -> DVec3 {
+    renderer_local_from_ecef(enu_to_ecef(enu, origin))
+}
+
+#[inline(always)]
+pub fn ecef_to_renderer_local(ecef: DVec3) -> DVec3 {
+    renderer_local_from_ecef(ecef)
 }
 
 #[inline(always)]
@@ -161,15 +200,28 @@ pub fn ecef_to_ned(ecef: DVec3, origin: LlaHae) -> Ned {
     }
 }
 
+#[inline(always)]
+pub fn ecef_to_enu(ecef: DVec3, origin: LlaHae) -> Enu {
+    let ned = ecef_to_ned(ecef, origin);
+
+    Enu {
+        e_m: ned.e_m,
+        n_m: ned.n_m,
+        u_m: -ned.d_m,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        LlaHae, Ned, ecef_to_lla_hae, ecef_to_ned, lat_lon_degrees_from_unit, lla_hae_to_ecef,
-        ned_to_ecef, renderer_local_to_lla_hae, unit_from_lat_lon_degrees,
+        Enu, LlaHae, Ned, ecef_to_enu, ecef_to_lla_hae, ecef_to_ned, ecef_to_renderer_local,
+        enu_to_ecef, enu_to_renderer_local, lat_lon_degrees_from_unit, lla_hae_to_ecef,
+        lla_to_renderer_local, ned_to_ecef, ned_to_renderer_local, renderer_local_from_ecef,
+        renderer_local_to_lla_hae, unit_from_lat_lon_degrees,
     };
     use crate::math::TerrainShape;
     use bevy::math::DVec3;
-    use small_world::wgs84::{AltType, Lla as SwLla, Ned as SwNed};
+    use small_world::wgs84::{AltType, Enu as SwEnu, Lla as SwLla, Ned as SwNed};
 
     fn normalize_lon(lon_deg: f64) -> f64 {
         let mut lon = lon_deg % 360.0;
@@ -251,6 +303,27 @@ mod tests {
         assert!((round.n_m - ned.n_m).abs() < 1e-6);
         assert!((round.e_m - ned.e_m).abs() < 1e-6);
         assert!((round.d_m - ned.d_m).abs() < 1e-6);
+    }
+
+    #[test]
+    fn enu_ecef_roundtrip_is_stable() {
+        let origin = LlaHae {
+            lat_deg: 46.55,
+            lon_deg: 10.6,
+            hae_m: 2920.0,
+        };
+        let enu = Enu {
+            e_m: -88.5,
+            n_m: 152.0,
+            u_m: -17.25,
+        };
+
+        let ecef = enu_to_ecef(enu, origin);
+        let round = ecef_to_enu(ecef, origin);
+
+        assert!((round.e_m - enu.e_m).abs() < 1e-6);
+        assert!((round.n_m - enu.n_m).abs() < 1e-6);
+        assert!((round.u_m - enu.u_m).abs() < 1e-6);
     }
 
     fn renderer_local_from_small_world_lla(lat_deg: f64, lon_deg: f64, hae_m: f64) -> DVec3 {
@@ -380,6 +453,56 @@ mod tests {
     }
 
     #[test]
+    fn small_world_enu_to_ecef_matches_renderer_geodesy() {
+        let cases = [
+            (
+                LlaHae {
+                    lat_deg: 46.55,
+                    lon_deg: 10.6,
+                    hae_m: 2920.0,
+                },
+                Enu {
+                    e_m: -88.5,
+                    n_m: 152.0,
+                    u_m: -17.25,
+                },
+            ),
+            (
+                LlaHae {
+                    lat_deg: 25.7617,
+                    lon_deg: -80.1918,
+                    hae_m: 110.0,
+                },
+                Enu {
+                    e_m: 45.0,
+                    n_m: -320.0,
+                    u_m: 12.5,
+                },
+            ),
+        ];
+
+        for (origin, enu) in cases {
+            let renderer = enu_to_ecef(enu, origin);
+            let sw_origin =
+                SwLla::new(origin.lat_deg, origin.lon_deg, origin.hae_m, AltType::Wgs84);
+            let small_world = SwEnu::new(enu.e_m, enu.n_m, enu.u_m, sw_origin).to_ecef();
+
+            assert!((renderer.x - small_world.x()).abs() < 1e-6);
+            assert!((renderer.y - small_world.y()).abs() < 1e-6);
+            assert!((renderer.z - small_world.z()).abs() < 1e-6);
+
+            let renderer_enu = ecef_to_enu(
+                DVec3::new(small_world.x(), small_world.y(), small_world.z()),
+                origin,
+            );
+
+            assert!((renderer_enu.e_m - enu.e_m).abs() < 1e-6);
+            assert!((renderer_enu.n_m - enu.n_m).abs() < 1e-6);
+            assert!((renderer_enu.u_m - enu.u_m).abs() < 1e-6);
+        }
+    }
+
+    #[test]
     fn unit_from_lat_lon_matches_small_world_wgs84_surface() {
         let cases = [
             (0.0, 0.0),
@@ -443,6 +566,43 @@ mod tests {
             assert!((normalize_lon(lla.lon_deg) - normalize_lon(lon_deg)).abs() < 1e-9);
             assert!((lla.hae_m - hae_m).abs() < 1e-4);
         }
+    }
+
+    #[test]
+    fn renderer_local_helpers_are_consistent() {
+        let origin = LlaHae {
+            lat_deg: 46.55,
+            lon_deg: 10.6,
+            hae_m: 2920.0,
+        };
+        let lla = LlaHae {
+            lat_deg: 46.551,
+            lon_deg: 10.601,
+            hae_m: 2950.0,
+        };
+        let ned = Ned {
+            n_m: 152.0,
+            e_m: -88.5,
+            d_m: 17.25,
+        };
+        let enu = Enu {
+            e_m: ned.e_m,
+            n_m: ned.n_m,
+            u_m: -ned.d_m,
+        };
+
+        let lla_local = lla_to_renderer_local(lla);
+        let direct_lla_local = renderer_local_from_ecef(lla_hae_to_ecef(lla));
+        assert!((lla_local - direct_lla_local).length() < 1e-12);
+
+        let ned_local = ned_to_renderer_local(ned, origin);
+        let enu_local = enu_to_renderer_local(enu, origin);
+        let direct_ned_local = renderer_local_from_ecef(ned_to_ecef(ned, origin));
+        let direct_enu_local = ecef_to_renderer_local(enu_to_ecef(enu, origin));
+
+        assert!((ned_local - direct_ned_local).length() < 1e-12);
+        assert!((enu_local - direct_enu_local).length() < 1e-12);
+        assert!((ned_local - enu_local).length() < 1e-9);
     }
 
     #[test]
