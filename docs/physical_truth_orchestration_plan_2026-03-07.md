@@ -24,19 +24,19 @@ Status: materially complete
 Completed:
 - preprocess transform and raster lineage audit
 - source raster -> preprocessed tile -> runtime sample tracing
-- Earth and Swiss source-parity harnesses
+- Earth and representative high-relief overlay source-parity harnesses
 - mapping-version and asset-version implications documented
 
 Open:
-- tighter attribution of the remaining Swiss overlay source-parity residual
+- tighter attribution of the remaining high-relief overlay source-parity residual on the current reference sample
 
 ### Phase 3: End-To-End Truth Regression
 Status: partial
 
 Completed:
 - multi-region Earth truth matrix
-- Swiss overlay overlap-strip truth matrix
-- end-to-end path regression for the Swiss overlay
+- reference high-relief overlay truth matrix in the currently available overlap strip
+- end-to-end path regression for the current reference high-relief overlay sample
 - local-frame orbit regression in unit tests
 
 Open:
@@ -48,20 +48,20 @@ Open:
 ### PT1: Expand Truth Coverage
 Skill: `terrain-end-to-end-truth`
 Goal:
-- broaden the physical-truth matrix beyond the currently local HGT overlap tiles
+- broaden the physical-truth matrix beyond the currently available local overlap tiles
 Tasks:
 - add more `small_world`-compatible ground coverage for mountainous overlays
 - extend `scripts/physical_truth_matrix.py` cases to the new coverage
 - rerun the base-earth and overlay suites and publish updated artifacts
 Acceptance:
-- the truth matrix is no longer dominated by the single Swiss/HGT overlap strip
+- the truth matrix is no longer dominated by a single local overlap strip or one reference overlay
 
 ### PT2: Tighten Overlay Source Parity
 Skill: `terrain-raster-truth`
 Goal:
-- reduce the remaining `~13-20 m` Swiss overlay p95 renderer-vs-source term where it is worth the cost
+- reduce the remaining `~13-20 m` p95 renderer-vs-source term on the current reference high-relief overlay where it is worth the cost
 Tasks:
-- profile the remaining Swiss overlay parity error by subregion
+- profile the remaining high-relief overlay parity error by subregion
 - determine whether it is driven by residual face resolution, interpolation, or mask/warp behavior
 - document the best size/truth tradeoff for mountainous overlays
 Acceptance:
@@ -72,7 +72,7 @@ Skill: `terrain-release-verifier`
 Goal:
 - stop correctness regressions from re-entering the renderer
 Tasks:
-- define pass/fail thresholds for direct geodesy, Earth truth matrix, Swiss overlay parity, and path regression
+- define pass/fail thresholds for direct geodesy, the Earth truth matrix, representative high-relief overlay parity, and path regression
 - add a concise gate document with exact commands and expected outputs
 Acceptance:
 - merge readiness can be evaluated from rerunnable commands and concrete thresholds
@@ -83,4 +83,4 @@ Acceptance:
 - the dominant renderer-native mapping bug is fixed
 - current Earth `lod_count = 5` is close to the dataset floor in flat and coastal regions
 - steep-terrain global-base truth is still bounded by source DEM quality and face resolution
-- for mountain work, a high-quality regional overlay remains the preferred correctness path
+- for truth-critical mountainous work, high-quality regional overlays remain the preferred correctness path until broader coverage improves
