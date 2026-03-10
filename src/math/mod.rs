@@ -2,6 +2,7 @@ use bevy::math::{DMat3, DVec2, IVec2};
 use std::mem;
 
 mod coordinate;
+mod geo_grid;
 pub mod geodesy;
 mod spheroid;
 mod surface_approximation;
@@ -9,6 +10,12 @@ mod terrain_shape;
 
 pub use self::{
     coordinate::{Coordinate, TileCoordinate, ViewCoordinate},
+    geo_grid::GridGeoExt,
+    geodesy::{
+        Enu, LlaHae, Ned, ecef_from_renderer_local, ecef_to_renderer_local, enu_to_renderer_local,
+        lla_to_renderer_local, ned_to_renderer_local, renderer_local_from_ecef,
+        renderer_local_to_lla_hae,
+    },
     surface_approximation::SurfaceApproximation,
     terrain_shape::TerrainShape,
 };

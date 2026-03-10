@@ -78,7 +78,7 @@ pub mod prelude {
             DebugCameraController, DebugTerrainMaterial, LoadingImages, OrbitalCameraController,
             TerrainDebugPlugin,
         },
-        math::{TerrainShape, TileCoordinate},
+        math::{Enu, GridGeoExt, LlaHae, Ned, TerrainShape, TileCoordinate},
         picking::{PickingData, TerrainPickingPlugin},
         plugin::{TerrainPlugin, TerrainSettings},
         // preprocess::{PreprocessDataset, Preprocessor, SphericalDataset, TerrainPreprocessPlugin},
@@ -92,5 +92,5 @@ pub mod prelude {
         },
         terrain_view::{TerrainViewComponents, TerrainViewConfig},
     };
-    pub use big_space::{commands::BigSpaceCommands, grid::Grid};
+    pub use big_space::prelude::{BigSpaceCommands, CellCoord, Grid};
 }
