@@ -1,0 +1,56 @@
+name: Plan Tracker
+description: Track a multi-issue plan or milestone against a plan document.
+title: "[Plan] "
+labels:
+  - tracking
+body:
+  - type: input
+    id: plan_doc
+    attributes:
+      label: Plan document
+      description: Repo-relative path to the source plan document.
+      placeholder: docs/geo-coordinate-api-plan.md
+    validations:
+      required: true
+  - type: input
+    id: milestone
+    attributes:
+      label: Milestone
+      description: GitHub milestone that should own this tracker.
+      placeholder: Geo Coordinate API
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What counts as done for this plan?
+      placeholder: Summarize the plan outcome in a few sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: task_list
+    attributes:
+      label: Task list
+      description: Use GitHub task-list syntax and link the child issues.
+      placeholder: |
+        - [ ] #123
+        - [ ] #124
+    validations:
+      required: true
+  - type: textarea
+    id: exit_criteria
+    attributes:
+      label: Exit criteria
+      description: Concrete acceptance gates for closing the tracker.
+      placeholder: List the validation or merge gates.
+    validations:
+      required: true
+  - type: textarea
+    id: blockers
+    attributes:
+      label: Risks and blockers
+      description: Anything that can stall the plan or force replanning.
+      placeholder: Note the main open risks.
+    validations:
+      required: false
