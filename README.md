@@ -72,8 +72,16 @@ It accepts an optional terrain root argument, so the same example works for both
 ```bash
 cargo run --example minimal_globe
 cargo run --example minimal_globe -- terrains/tutorial_earth
+cargo run --example minimal_globe -- --max-lod 7
+OPENTOPOGRAPHY_API_KEY=your-key cargo run --example minimal_globe -- --max-lod 7 --stream-height
 TERRAIN_STREAMING_CACHE_ROOT=streaming_cache cargo run --example minimal_globe
 ```
+
+Default example behavior:
+- `minimal_globe` now defaults to a target max LOD of `7`
+- use `--max-lod N` or `MINIMAL_GLOBE_MAX_LOD=N` to change it
+- use `--stream-height` when you want real DEM refinement beyond the bundled starter Earth
+- without cached higher-LOD tiles or `--stream-height`, requesting LODs above the local asset just falls back to the coarser local terrain
 
 ## Optional Online Imagery Cache
 
@@ -85,7 +93,7 @@ TERRAIN_STREAM_ONLINE=1 cargo run --example minimal_globe
 
 Default example behavior:
 - when `TERRAIN_STREAM_ONLINE=1` is set and `TERRAIN_STREAMING_CACHE_ROOT` is unset, the examples use `streaming_cache`
-- when online streaming is enabled and `TERRAIN_STREAMING_MAX_LOD` is unset, the examples allow refinement up to `lod 6`
+- when `minimal_globe` does not receive `--max-lod` or `MINIMAL_GLOBE_MAX_LOD`, it targets `lod 7`
 - streamed tiles are written under `assets/streaming_cache/`
 - cache reads prefer `assets/streaming_cache/` and then fall back to the bundled starter Earth
 
@@ -99,8 +107,7 @@ It requires an OpenTopography API key and currently uses `AW3D30_E`:
 
 ```bash
 OPENTOPOGRAPHY_API_KEY=your-key \
-TERRAIN_STREAM_HEIGHT=1 \
-cargo run --example minimal_globe
+cargo run --example minimal_globe -- --max-lod 7 --stream-height
 ```
 
 If you want a demo that intentionally flies into a land target and warms the cache without manual camera input, use:
@@ -112,7 +119,9 @@ cargo run --example streaming_warmup_globe
 
 Warmup demo notes:
 - it is intentionally online-first and writes into `assets/streaming_cache/` by default
-- if an OpenTopography key is present, it warms both imagery and height
+- it uses the `eox_s2cloudless_2017` imagery preset by default so the scripted land fly-in shows visible detail
+- set `TERRAIN_STREAM_IMAGERY_PRESET=gibs_modis` if you want the original NASA GIBS fallback instead
+- set `TERRAIN_STREAM_HEIGHT=1` to include OpenTopography height
 - `STREAM_WARMUP_EXIT_AFTER_SECONDS=45` makes it useful for repeatable cache-warm runs
 - `STREAM_WARMUP_TARGET_LAT` and `STREAM_WARMUP_TARGET_LON` let you retarget the fly-in
 

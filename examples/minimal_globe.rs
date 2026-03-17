@@ -1,15 +1,16 @@
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
 use bevy_terrain::{math::geodesy::unit_from_lat_lon_degrees, prelude::*};
-use std::{env, path::PathBuf};
+use std::{env, path::PathBuf, process};
 
 const RADIUS: f64 = 6_371_000.0;
 const DEFAULT_TERRAIN_ROOT: &str = "terrains/earth";
+const MAX_LOD_ENV: &str = "MINIMAL_GLOBE_MAX_LOD";
 const STREAMING_CACHE_ROOT_ENV: &str = "TERRAIN_STREAMING_CACHE_ROOT";
 const STREAM_ONLINE_ENV: &str = "TERRAIN_STREAM_ONLINE";
 const STREAM_HEIGHT_ENV: &str = "TERRAIN_STREAM_HEIGHT";
 const STREAMING_MAX_LOD_ENV: &str = "TERRAIN_STREAMING_MAX_LOD";
-const DEFAULT_STREAMING_MAX_LOD: u32 = 10;
+const DEFAULT_MAX_LOD: u32 = 7;
 const CAMERA_TARGET_LAT_ENV: &str = "MINIMAL_GLOBE_TARGET_LAT";
 const CAMERA_TARGET_LON_ENV: &str = "MINIMAL_GLOBE_TARGET_LON";
 const CAMERA_ALTITUDE_ENV: &str = "MINIMAL_GLOBE_CAMERA_ALTITUDE_M";
@@ -17,7 +18,16 @@ const CAMERA_BACKOFF_ENV: &str = "MINIMAL_GLOBE_CAMERA_BACKOFF_M";
 const DEFAULT_CAMERA_ALTITUDE_M: f32 = 120_000.0;
 const DEFAULT_CAMERA_BACKOFF_M: f32 = 80_000.0;
 
+#[derive(Resource, Clone, Debug)]
+struct MinimalGlobeOptions {
+    terrain_root: String,
+    max_lod: u32,
+    stream_online: bool,
+    stream_height: bool,
+}
+
 fn main() {
+    let options = MinimalGlobeOptions::from_env_and_args();
     let mut app = App::new();
     app.add_plugins((
         DefaultPlugins
@@ -36,51 +46,138 @@ fn main() {
         TerrainDebugPlugin,
         TerrainPickingPlugin,
     ))
-    .insert_resource(terrain_settings_from_env())
+    .insert_resource(options.clone())
+    .insert_resource(terrain_settings_from_options(&options))
     .add_systems(Startup, setup);
 
-    if let Some(streaming_settings) = streaming_settings_from_env() {
+    if let Some(streaming_settings) = streaming_settings_from_options(&options) {
         app.insert_resource(streaming_settings);
     }
 
     app.run();
 }
 
-fn terrain_settings_from_env() -> TerrainSettings {
-    let mut settings = TerrainSettings::with_albedo();
-    if let Some(max_lod) = streaming_target_lod_count_from_env() {
-        settings = settings.with_streaming_target_lod_count(max_lod);
+impl MinimalGlobeOptions {
+    fn from_env_and_args() -> Self {
+        let mut terrain_root = None;
+        let mut max_lod = env_u32(MAX_LOD_ENV)
+            .or_else(|| env_u32(STREAMING_MAX_LOD_ENV))
+            .unwrap_or(DEFAULT_MAX_LOD);
+        let mut stream_online = env_var_enabled(STREAM_ONLINE_ENV);
+        let mut stream_height = env_var_enabled(STREAM_HEIGHT_ENV);
+
+        let mut args = env::args().skip(1);
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--help" | "-h" => print_usage_and_exit(0),
+                "--terrain-root" => terrain_root = Some(next_arg_value(&arg, &mut args)),
+                "--max-lod" => {
+                    let value = next_arg_value(&arg, &mut args);
+                    max_lod = parse_u32_flag("--max-lod", &value);
+                }
+                "--stream-online" => stream_online = true,
+                "--stream-height" => {
+                    stream_online = true;
+                    stream_height = true;
+                }
+                _ => {
+                    if let Some(value) = arg.strip_prefix("--terrain-root=") {
+                        terrain_root = Some(value.to_string());
+                    } else if let Some(value) = arg.strip_prefix("--max-lod=") {
+                        max_lod = parse_u32_flag("--max-lod", value);
+                    } else if arg.starts_with("--") {
+                        eprintln!("Unknown flag: {arg}");
+                        print_usage_and_exit(2);
+                    } else if terrain_root.is_none() {
+                        terrain_root = Some(arg);
+                    } else {
+                        eprintln!("Unexpected extra argument: {arg}");
+                        print_usage_and_exit(2);
+                    }
+                }
+            }
+        }
+
+        Self {
+            terrain_root: terrain_root.unwrap_or_else(|| DEFAULT_TERRAIN_ROOT.to_string()),
+            max_lod,
+            stream_online,
+            stream_height,
+        }
     }
+}
+
+fn print_usage_and_exit(code: i32) -> ! {
+    let usage = format!(
+        "Usage: cargo run --example minimal_globe -- [terrain_root] [--max-lod N] [--stream-online] [--stream-height]\n\
+         \n\
+         Environment overrides:\n\
+         - {MAX_LOD_ENV}=N\n\
+         - {STREAMING_CACHE_ROOT_ENV}=streaming_cache\n\
+         - {STREAM_ONLINE_ENV}=1\n\
+         - {STREAM_HEIGHT_ENV}=1\n\
+         - {CAMERA_TARGET_LAT_ENV}=46.55\n\
+         - {CAMERA_TARGET_LON_ENV}=10.60\n\
+         - {CAMERA_ALTITUDE_ENV}=120000\n\
+         - {CAMERA_BACKOFF_ENV}=80000\n"
+    );
+    if code == 0 {
+        println!("{usage}");
+    } else {
+        eprintln!("{usage}");
+    }
+    process::exit(code);
+}
+
+fn next_arg_value(flag: &str, args: &mut impl Iterator<Item = String>) -> String {
+    match args.next() {
+        Some(value) => value,
+        None => {
+            eprintln!("Missing value for {flag}");
+            print_usage_and_exit(2);
+        }
+    }
+}
+
+fn parse_u32_flag(flag: &str, value: &str) -> u32 {
+    match value.trim().parse::<u32>() {
+        Ok(value) => value,
+        Err(_) => {
+            eprintln!("Invalid {flag} value: {value}");
+            print_usage_and_exit(2);
+        }
+    }
+}
+
+fn terrain_settings_from_options(options: &MinimalGlobeOptions) -> TerrainSettings {
+    let settings = TerrainSettings::with_albedo()
+        .with_streaming_target_lod_count(options.max_lod);
 
     match env::var(STREAMING_CACHE_ROOT_ENV) {
         Ok(root) if !root.trim().is_empty() => settings.with_streaming_cache_root(root),
-        _ if streaming_requested() => settings.with_streaming_cache_root("streaming_cache"),
+        _ if options.stream_online || options.stream_height => {
+            settings.with_streaming_cache_root("streaming_cache")
+        }
         _ => settings,
     }
 }
 
-fn streaming_settings_from_env() -> Option<TerrainStreamingSettings> {
-    if !streaming_requested() {
+fn streaming_settings_from_options(options: &MinimalGlobeOptions) -> Option<TerrainStreamingSettings> {
+    if !options.stream_online && !options.stream_height {
         return None;
     }
 
-    Some(if env_var_enabled(STREAM_HEIGHT_ENV) {
+    Some(if options.stream_height {
         TerrainStreamingSettings::online_imagery_and_height()
     } else {
         TerrainStreamingSettings::online_imagery()
     })
 }
 
-fn streaming_requested() -> bool {
-    env_var_enabled(STREAM_ONLINE_ENV) || env_var_enabled(STREAM_HEIGHT_ENV)
-}
-
-fn streaming_target_lod_count_from_env() -> Option<u32> {
-    match env::var(STREAMING_MAX_LOD_ENV) {
-        Ok(value) => value.trim().parse().ok(),
-        Err(_) if streaming_requested() => Some(DEFAULT_STREAMING_MAX_LOD),
-        Err(_) => None,
-    }
+fn env_u32(name: &str) -> Option<u32> {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
 }
 
 fn env_var_enabled(name: &str) -> bool {
@@ -148,11 +245,9 @@ fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut loading_images: ResMut<LoadingImages>,
+    options: Res<MinimalGlobeOptions>,
 ) {
-    // The first CLI argument optionally overrides the terrain root inside `assets/`.
-    let terrain_root = env::args()
-        .nth(1)
-        .unwrap_or_else(|| DEFAULT_TERRAIN_ROOT.to_string());
+    let terrain_root = options.terrain_root.clone();
     let terrain_config = format!("{terrain_root}/config.tc.ron");
     let terrain_config_fs = PathBuf::from("assets").join(&terrain_config);
 
@@ -165,10 +260,38 @@ fn setup(
     }
 
     info!(
-        "Controls: scroll or right-drag to zoom, left-drag to pan, middle-drag to orbit, T toggles fly camera."
+        "Controls: scroll or right-drag to zoom, left-drag to pan, middle-drag to orbit, T toggles fly camera. Use --max-lod N or {MAX_LOD_ENV}=N to change the refinement ceiling."
     );
 
     if let Ok(config) = TerrainConfig::load_file(&terrain_config_fs) {
+        info!(
+            "Minimal Globe target max LOD: {} (local terrain base lod_count={}).",
+            options.max_lod.max(config.lod_count),
+            config.lod_count
+        );
+
+        if options.stream_height && env::var("OPENTOPOGRAPHY_API_KEY").is_err() {
+            warn!(
+                "--stream-height was requested, but OPENTOPOGRAPHY_API_KEY is not set. The example will keep falling back to locally available height."
+            );
+        }
+
+        if options.max_lod > config.lod_count {
+            if options.stream_height {
+                info!(
+                    "Height streaming is enabled, so the renderer can refine beyond the local terrain asset up to LOD {}.",
+                    options.max_lod
+                );
+            } else {
+                warn!(
+                    "Requested max LOD {} exceeds locally available lod_count={}. For actual terrain detail at that LOD, use --stream-height (or TERRAIN_STREAM_HEIGHT=1) with OPENTOPOGRAPHY_API_KEY, or point {} at a warmed cache.",
+                    options.max_lod,
+                    config.lod_count,
+                    STREAMING_CACHE_ROOT_ENV
+                );
+            }
+        }
+
         if terrain_root == DEFAULT_TERRAIN_ROOT && config.lod_count < 5 {
             warn!(
                 "Bundled Earth is a coarse starter dataset (lod_count={}). Steep relief like the Alps will look soft unless you use a higher-resolution terrain root, cached higher-LOD tiles, or TERRAIN_STREAM_HEIGHT=1 with OpenTopography.",
