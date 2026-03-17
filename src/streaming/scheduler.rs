@@ -135,8 +135,8 @@ fn request_priority(
 
 fn attachment_priority(attachment_label: &AttachmentLabel) -> u8 {
     match attachment_label {
-        AttachmentLabel::Custom(name) if name == "albedo" => 1,
-        AttachmentLabel::Height => 0,
+        AttachmentLabel::Height => 1,
+        AttachmentLabel::Custom(name) if name == "albedo" => 0,
         AttachmentLabel::Custom(_) | AttachmentLabel::Empty(_) => 0,
     }
 }
@@ -994,7 +994,7 @@ mod tests {
     }
 
     #[test]
-    fn queue_prefers_imagery_over_height_when_capacity_is_tight() {
+    fn queue_prefers_height_over_imagery_when_capacity_is_tight() {
         let settings =
             TerrainStreamingSettings::online_imagery_and_height().with_max_pending_requests(1);
         let mut queue = StreamingRequestQueue::default();
@@ -1002,20 +1002,18 @@ mod tests {
         let mut height_request = albedo_request();
         height_request.attachment_label = AttachmentLabel::Height;
         height_request.coordinate = crate::math::TileCoordinate::new(0, 6, IVec2::new(3, 5));
+        let expected_height_coordinate = height_request.coordinate;
 
         let mut imagery_request = albedo_request();
         imagery_request.coordinate = crate::math::TileCoordinate::new(0, 4, IVec2::new(8, 2));
 
         assert!(queue.enqueue(height_request, &settings));
-        assert!(queue.enqueue(imagery_request.clone(), &settings));
+        assert!(!queue.enqueue(imagery_request, &settings));
 
         let drained = queue.dequeue_batch(1);
         assert_eq!(drained.len(), 1);
-        assert_eq!(
-            drained[0].request.attachment_label,
-            imagery_request.attachment_label
-        );
-        assert_eq!(drained[0].request.coordinate, imagery_request.coordinate);
+        assert_eq!(drained[0].request.attachment_label, AttachmentLabel::Height);
+        assert_eq!(drained[0].request.coordinate, expected_height_coordinate);
     }
 
     #[test]
