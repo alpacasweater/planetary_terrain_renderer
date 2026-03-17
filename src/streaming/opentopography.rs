@@ -15,7 +15,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tiff::{
-    decoder::{Decoder, DecodingResult},
+    decoder::{Decoder, DecodingResult, Limits},
     encoder::{TiffEncoder, colortype},
 };
 
@@ -27,6 +27,9 @@ const MAX_REQUEST_AREA_30M_SQ_KM: f64 = 450_000.0;
 const MAX_REQUEST_AREA_90M_SQ_KM: f64 = 4_050_000.0;
 const PLAUSIBLE_EARTH_MIN_HEIGHT_M: f32 = -20_000.0;
 const PLAUSIBLE_EARTH_MAX_HEIGHT_M: f32 = 20_000.0;
+const OPENTOPOGRAPHY_MAX_DECODING_BUFFER_BYTES: usize = 1024 * 1024 * 1024;
+const OPENTOPOGRAPHY_MAX_INTERMEDIATE_BUFFER_BYTES: usize = 512 * 1024 * 1024;
+const OPENTOPOGRAPHY_MAX_IFD_VALUE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpenTopographyHeightConfig {
@@ -170,6 +173,10 @@ impl StreamingTileProvider for OpenTopographyHeightProvider {
             .build();
 
         let response = agent.get(&url).call().map_err(map_ureq_error)?;
+        let content_type = response
+            .header("content-type")
+            .map(|value| value.split(';').next().unwrap_or(value).trim().to_string())
+            .unwrap_or_else(|| "application/octet-stream".to_string());
         let mut body = Vec::new();
         response
             .into_reader()
@@ -178,7 +185,7 @@ impl StreamingTileProvider for OpenTopographyHeightProvider {
                 StreamingProviderError::Transient(format!("opentopography read failed: {error}"))
             })?;
 
-        let source_dem = decode_dem_tiff(&body)?;
+        let source_dem = decode_dem_tiff(&body, &content_type)?;
         let target_heights = remap_source_to_tile(&source_dem, request, planned.bbox_lon_lat)?;
         let encoded_tile = encode_height_tiff(
             request.attachment_config.texture_size,
@@ -245,8 +252,7 @@ fn validate_bbox_area_for_dem_type(
     if area_sq_km > max_area_sq_km {
         return Err(StreamingProviderError::Unsupported(format!(
             "OpenTopography {dem_type} requests are limited to {:.0} km^2, but this tile covers about {:.0} km^2. Coarse tiles must fall back to local height until the view requests smaller regions.",
-            max_area_sq_km,
-            area_sq_km,
+            max_area_sq_km, area_sq_km,
         )));
     }
 
@@ -270,27 +276,43 @@ fn bbox_area_sq_km(bbox_lon_lat: [f64; 4]) -> f64 {
     EARTH_RADIUS_KM.powi(2) * lon_span_rad * (north_sin - south_sin).abs()
 }
 
+#[derive(Debug)]
 struct DecodedDem {
     width: u32,
     height: u32,
     samples: Vec<f32>,
 }
 
-fn decode_dem_tiff(bytes: &[u8]) -> Result<DecodedDem, StreamingProviderError> {
-    let mut decoder = Decoder::new(Cursor::new(bytes)).map_err(|error| {
+fn decode_dem_tiff(bytes: &[u8], content_type: &str) -> Result<DecodedDem, StreamingProviderError> {
+    decode_dem_tiff_with_limits(bytes, content_type, opentopography_tiff_limits())
+}
+
+fn decode_dem_tiff_with_limits(
+    bytes: &[u8],
+    content_type: &str,
+    limits: Limits,
+) -> Result<DecodedDem, StreamingProviderError> {
+    if !body_has_tiff_signature(bytes) {
+        return Err(non_tiff_response_error(bytes, content_type));
+    }
+
+    let mut decoder = Decoder::new(Cursor::new(bytes))
+        .map(|decoder| decoder.with_limits(limits))
+        .map_err(|error| {
         StreamingProviderError::Permanent(format!(
-            "failed to construct OpenTopography TIFF decoder: {error}"
+            "failed to construct OpenTopography TIFF decoder (content_type='{content_type}', magic='{}'): {error}",
+            body_magic_preview(bytes),
         ))
     })?;
     let (width, height) = decoder.dimensions().map_err(|error| {
         StreamingProviderError::Permanent(format!(
-            "failed to read OpenTopography TIFF dimensions: {error}"
+            "failed to read OpenTopography TIFF dimensions (content_type='{content_type}'): {error}"
         ))
     })?;
 
     let samples = match decoder.read_image().map_err(|error| {
         StreamingProviderError::Permanent(format!(
-            "failed to decode OpenTopography TIFF body: {error}"
+            "failed to decode OpenTopography TIFF body (content_type='{content_type}'): {error}"
         ))
     })? {
         DecodingResult::U8(values) => values.into_iter().map(f32::from).collect(),
@@ -334,6 +356,86 @@ fn decode_dem_tiff(bytes: &[u8]) -> Result<DecodedDem, StreamingProviderError> {
         height,
         samples,
     })
+}
+
+fn opentopography_tiff_limits() -> Limits {
+    let mut limits = Limits::default();
+    limits.decoding_buffer_size = OPENTOPOGRAPHY_MAX_DECODING_BUFFER_BYTES;
+    limits.intermediate_buffer_size = OPENTOPOGRAPHY_MAX_INTERMEDIATE_BUFFER_BYTES;
+    limits.ifd_value_size = OPENTOPOGRAPHY_MAX_IFD_VALUE_BYTES;
+    limits
+}
+
+fn body_has_tiff_signature(body: &[u8]) -> bool {
+    matches!(
+        body.get(..4),
+        Some(b"II*\0") | Some(b"MM\0*") | Some(b"II+\0") | Some(b"MM\0+")
+    )
+}
+
+fn non_tiff_response_error(body: &[u8], content_type: &str) -> StreamingProviderError {
+    if response_looks_like_text_document(body) || content_type_looks_textual(content_type) {
+        StreamingProviderError::Permanent(format!(
+            "OpenTopography returned a non-TIFF response (content_type='{content_type}', preview='{}')",
+            response_preview(body)
+        ))
+    } else {
+        StreamingProviderError::Permanent(format!(
+            "OpenTopography returned a non-TIFF body (content_type='{content_type}', magic='{}')",
+            body_magic_preview(body)
+        ))
+    }
+}
+
+fn content_type_looks_textual(content_type: &str) -> bool {
+    let content_type = content_type.trim().to_ascii_lowercase();
+    content_type.starts_with("text/")
+        || content_type.contains("json")
+        || content_type.contains("xml")
+        || content_type.contains("html")
+}
+
+fn response_looks_like_text_document(body: &[u8]) -> bool {
+    let prefix = body
+        .iter()
+        .copied()
+        .skip_while(|byte| byte.is_ascii_whitespace())
+        .take(96)
+        .collect::<Vec<_>>();
+    let prefix = String::from_utf8_lossy(&prefix).to_ascii_lowercase();
+
+    prefix.starts_with("<!doctype")
+        || prefix.starts_with("<html")
+        || prefix.starts_with("<?xml")
+        || prefix.starts_with("<serviceexceptionreport")
+        || prefix.starts_with("<ows:exceptionreport")
+        || prefix.starts_with("{\"error")
+        || prefix.starts_with("{\"message")
+        || prefix.starts_with("error")
+        || prefix.starts_with("message")
+}
+
+fn response_preview(body: &[u8]) -> String {
+    String::from_utf8_lossy(&body[..body.len().min(160)])
+        .replace('\n', " ")
+        .replace('\r', " ")
+        .chars()
+        .take(160)
+        .collect()
+}
+
+fn body_magic_preview(body: &[u8]) -> String {
+    let magic = body
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if magic.is_empty() {
+        "empty".to_string()
+    } else {
+        magic
+    }
 }
 
 fn remap_source_to_tile(
@@ -505,7 +607,11 @@ mod tests {
             ..Default::default()
         });
         let planned = provider
-            .plan_global_dem(&height_request(TileCoordinate::new(0, 6, IVec2::new(20, 18))))
+            .plan_global_dem(&height_request(TileCoordinate::new(
+                0,
+                6,
+                IVec2::new(20, 18),
+            )))
             .expect("mid-latitude tile should be plannable");
 
         let url = planned.url();
@@ -523,7 +629,11 @@ mod tests {
         });
 
         assert!(matches!(
-            provider.availability(&height_request(TileCoordinate::new(0, 6, IVec2::new(20, 18)))),
+            provider.availability(&height_request(TileCoordinate::new(
+                0,
+                6,
+                IVec2::new(20, 18)
+            ))),
             StreamingSourceAvailability::Unavailable { .. }
         ));
     }
@@ -568,6 +678,40 @@ mod tests {
 
         assert!(redacted.contains("API_Key=REDACTED"));
         assert!(!redacted.contains("secret-value"));
+    }
+
+    #[test]
+    fn html_response_is_reported_as_non_tiff() {
+        let error = decode_dem_tiff(
+            b"<!DOCTYPE html><html><body>rate limited</body></html>",
+            "text/html",
+        )
+        .expect_err("html error pages should not reach the TIFF decoder");
+
+        let message = error.to_string();
+        assert!(message.contains("non-TIFF response"));
+        assert!(message.contains("text/html"));
+        assert!(message.contains("rate limited"));
+    }
+
+    #[test]
+    fn decode_uses_configured_tiff_limits() {
+        let heights = vec![1234.0_f32; 1024 * 1024];
+        let bytes = encode_height_tiff(1024, 1024, &heights).expect("test TIFF should encode");
+        let mut tight_limits = Limits::default();
+        tight_limits.decoding_buffer_size = 1024 * 1024;
+        tight_limits.intermediate_buffer_size = 1024 * 1024;
+        tight_limits.ifd_value_size = OPENTOPOGRAPHY_MAX_IFD_VALUE_BYTES;
+
+        let error = decode_dem_tiff_with_limits(&bytes, "image/tiff", tight_limits)
+            .expect_err("artificially small limits should reject the TIFF");
+        assert!(error.to_string().contains("decoder limits exceeded"));
+
+        let decoded = decode_dem_tiff(&bytes, "image/tiff")
+            .expect("provider defaults should decode modest TIFF payloads");
+        assert_eq!(decoded.width, 1024);
+        assert_eq!(decoded.height, 1024);
+        assert_eq!(decoded.samples.len(), heights.len());
     }
 
     fn unique_temp_dir() -> PathBuf {

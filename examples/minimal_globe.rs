@@ -1,9 +1,7 @@
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
 use bevy_terrain::{
-    math::geodesy::unit_from_lat_lon_degrees,
-    prelude::*,
-    streaming::NasaGibsImageryConfig,
+    math::geodesy::unit_from_lat_lon_degrees, prelude::*, streaming::NasaGibsImageryConfig,
 };
 use std::{env, path::PathBuf, process};
 
@@ -20,8 +18,9 @@ const CAMERA_TARGET_LAT_ENV: &str = "MINIMAL_GLOBE_TARGET_LAT";
 const CAMERA_TARGET_LON_ENV: &str = "MINIMAL_GLOBE_TARGET_LON";
 const CAMERA_ALTITUDE_ENV: &str = "MINIMAL_GLOBE_CAMERA_ALTITUDE_M";
 const CAMERA_BACKOFF_ENV: &str = "MINIMAL_GLOBE_CAMERA_BACKOFF_M";
-const DEFAULT_CAMERA_ALTITUDE_M: f32 = 120_000.0;
-const DEFAULT_CAMERA_BACKOFF_M: f32 = 80_000.0;
+const DEFAULT_CAMERA_ALTITUDE_M: f32 = 40_000.0;
+const DEFAULT_CAMERA_BACKOFF_M: f32 = 18_000.0;
+const DEFAULT_HEIGHT_STREAM_MAX_INFLIGHT: usize = 2;
 
 #[derive(Resource, Clone, Debug)]
 struct MinimalGlobeOptions {
@@ -162,8 +161,7 @@ fn parse_u32_flag(flag: &str, value: &str) -> u32 {
 }
 
 fn terrain_settings_from_options(options: &MinimalGlobeOptions) -> TerrainSettings {
-    let settings = TerrainSettings::with_albedo()
-        .with_streaming_target_lod_count(options.max_lod);
+    let settings = TerrainSettings::with_albedo().with_streaming_target_lod_count(options.max_lod);
 
     match env::var(STREAMING_CACHE_ROOT_ENV) {
         Ok(root) if !root.trim().is_empty() => settings.with_streaming_cache_root(root),
@@ -174,13 +172,16 @@ fn terrain_settings_from_options(options: &MinimalGlobeOptions) -> TerrainSettin
     }
 }
 
-fn streaming_settings_from_options(options: &MinimalGlobeOptions) -> Option<TerrainStreamingSettings> {
+fn streaming_settings_from_options(
+    options: &MinimalGlobeOptions,
+) -> Option<TerrainStreamingSettings> {
     if !options.stream_online && !options.stream_height {
         return None;
     }
 
     Some(if options.stream_height {
         TerrainStreamingSettings::online_imagery_and_height()
+            .with_max_inflight_requests(DEFAULT_HEIGHT_STREAM_MAX_INFLIGHT)
     } else {
         TerrainStreamingSettings::online_imagery()
     })
@@ -316,9 +317,7 @@ fn setup(
             } else {
                 warn!(
                     "Requested max LOD {} exceeds locally available lod_count={}. For actual terrain detail at that LOD, use --stream-height (or TERRAIN_STREAM_HEIGHT=1) with OPENTOPOGRAPHY_API_KEY, or point {} at a warmed cache.",
-                    options.max_lod,
-                    config.lod_count,
-                    STREAMING_CACHE_ROOT_ENV
+                    options.max_lod, config.lod_count, STREAMING_CACHE_ROOT_ENV
                 );
             }
         }

@@ -22,8 +22,8 @@ use bevy::{
     },
     tasks::{AsyncComputeTaskPool, Task},
 };
-use std::{iter, mem};
 use std::time::Instant;
+use std::{iter, mem};
 
 /// Stores the GPU representation of the [`TileAtlas`] (array textures)
 /// alongside the data to update it.
@@ -43,7 +43,7 @@ impl GpuTileAtlas {
         for attachment in self.attachments.values() {
             let Some(pipeline) = pipeline_cache.get_compute_pipeline(attachment.mip_pipeline)
             else {
-                dbg!("Skipped mipmap generation");
+                debug!("Skipped mipmap generation because the compute pipeline is not ready yet.");
                 return; // Todo: In case the pipeline has not been loaded yet, but a mip map should be created, we should not skip and clear the mip map generation list
             };
 
@@ -142,10 +142,7 @@ impl GpuTileAtlas {
             let deferred_count = deferred_tiles.len();
             tile_atlas.uploading_tiles = deferred_tiles;
             let backlog_count = tile_atlas.uploading_tiles.len();
-            tile_atlas.note_upload_deferred_attachment_tiles(
-                deferred_count,
-                backlog_count,
-            );
+            tile_atlas.note_upload_deferred_attachment_tiles(deferred_count, backlog_count);
             gpu_tile_atlas.upload_tiles = upload_tiles;
 
             for attachment in gpu_tile_atlas.attachments.values_mut() {
@@ -202,10 +199,7 @@ impl GpuTileAtlas {
             PHASE_RENDER_PREPARE_GPU_TILE_ATLAS_MIP_BIND_GROUPS,
             mip_bind_group_elapsed,
         );
-        perf_telemetry.record_duration(
-            PHASE_RENDER_PREPARE_GPU_TILE_ATLAS_UPLOADS,
-            upload_elapsed,
-        );
+        perf_telemetry.record_duration(PHASE_RENDER_PREPARE_GPU_TILE_ATLAS_UPLOADS, upload_elapsed);
     }
 
     pub(crate) fn queue(
