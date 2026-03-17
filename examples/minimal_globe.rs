@@ -319,10 +319,17 @@ fn setup(
         }
 
         if terrain_root == DEFAULT_TERRAIN_ROOT && config.lod_count < 5 {
-            warn!(
-                "Bundled Earth is a coarse starter dataset (lod_count={}). Steep relief like the Alps will look soft unless you use a higher-resolution terrain root, cached higher-LOD tiles, or TERRAIN_STREAM_HEIGHT=1 with OpenTopography.",
-                config.lod_count
-            );
+            if options.stream_height {
+                info!(
+                    "Bundled Earth local fallback is a coarse starter dataset (lod_count={}), but height streaming is enabled so close-pass terrain can refine beyond the bundled asset.",
+                    config.lod_count
+                );
+            } else {
+                warn!(
+                    "Bundled Earth is a coarse starter dataset (lod_count={}). Steep relief like the Alps will look soft unless you use a higher-resolution terrain root, cached higher-LOD tiles, or TERRAIN_STREAM_HEIGHT=1 with OpenTopography.",
+                    config.lod_count
+                );
+            }
         }
     }
 

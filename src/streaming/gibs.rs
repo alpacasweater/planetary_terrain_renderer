@@ -245,7 +245,7 @@ fn materialize_tile_with_config(
         Ok(image) => image,
         Err(error) => {
             if let Some(fallback) = &config.fallback {
-                bevy::log::warn!(
+                bevy::log::info!(
                     "Imagery source {} failed for {:?}: {}. Retrying with fallback {}",
                     config.source_id,
                     request.coordinate,
@@ -262,7 +262,7 @@ fn materialize_tile_with_config(
     let target_rgb = remap_source_to_tile(&source_image, request, planned.bbox_lon_lat)?;
     if imagery_looks_like_blank_fill(&target_rgb) {
         if let Some(fallback) = &config.fallback {
-            bevy::log::warn!(
+            bevy::log::debug!(
                 "Imagery source {} produced a near-blank tile for {:?}; retrying with fallback {}",
                 config.source_id,
                 request.coordinate,

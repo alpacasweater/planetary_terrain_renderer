@@ -401,12 +401,22 @@ pub fn finish_streaming_jobs(
                     worker.stats.cache_writes_total += 1;
                 }
                 Err(error) => {
-                    warn!(
-                        "Streaming request failed for {:?} {:?}: {}",
-                        outcome.request.coordinate,
-                        outcome.request.attachment_label,
-                        describe_streaming_task_error(&error)
-                    );
+                    let message = describe_streaming_task_error(&error);
+                    if should_downgrade_streaming_failure_log(&error, &outcome.request) {
+                        debug!(
+                            "Streaming request skipped for {:?} {:?}: {}",
+                            outcome.request.coordinate,
+                            outcome.request.attachment_label,
+                            message
+                        );
+                    } else {
+                        warn!(
+                            "Streaming request failed for {:?} {:?}: {}",
+                            outcome.request.coordinate,
+                            outcome.request.attachment_label,
+                            message
+                        );
+                    }
                     queue.note_failed();
                     worker.stats.failed_total += 1;
                 }
@@ -416,6 +426,20 @@ pub fn finish_streaming_jobs(
         }
     }
     worker.inflight = remaining;
+}
+
+fn should_downgrade_streaming_failure_log(
+    error: &StreamingTaskError,
+    request: &StreamingTileRequest,
+) -> bool {
+    matches!(
+        (error, &request.attachment_label),
+        (
+            StreamingTaskError::Provider(StreamingProviderError::Unsupported(reason)),
+            AttachmentLabel::Custom(name)
+        ) if name == "albedo"
+            && reason.contains("tile longitude span crosses the antimeridian")
+    )
 }
 
 fn materialize_request_into_cache<P: StreamingTileProvider>(
@@ -980,6 +1004,42 @@ mod tests {
         let drained = queue.dequeue_batch(1);
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].request.coordinate, deep_request.coordinate);
+    }
+
+    #[test]
+    fn antimeridian_albedo_rejections_are_treated_as_expected_noise() {
+        let error = StreamingTaskError::Provider(StreamingProviderError::Unsupported(
+            "tile longitude span crosses the antimeridian; split-request planning is not implemented yet"
+                .to_string(),
+        ));
+
+        assert!(should_downgrade_streaming_failure_log(
+            &error,
+            &albedo_request(),
+        ));
+    }
+
+    #[test]
+    fn non_albedo_or_non_antimeridian_failures_still_warn() {
+        let antimeridian_error = StreamingTaskError::Provider(StreamingProviderError::Unsupported(
+            "tile longitude span crosses the antimeridian; split-request planning is not implemented yet"
+                .to_string(),
+        ));
+        let mut height_request = albedo_request();
+        height_request.attachment_label = AttachmentLabel::Height;
+
+        assert!(!should_downgrade_streaming_failure_log(
+            &antimeridian_error,
+            &height_request,
+        ));
+
+        let other_albedo_error = StreamingTaskError::Provider(StreamingProviderError::Unsupported(
+            "provider is rate limited".to_string(),
+        ));
+        assert!(!should_downgrade_streaming_failure_log(
+            &other_albedo_error,
+            &albedo_request(),
+        ));
     }
 
     fn unique_temp_dir() -> PathBuf {
