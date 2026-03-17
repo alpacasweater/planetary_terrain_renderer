@@ -18,28 +18,55 @@ use tiff::encoder::{TiffEncoder, colortype};
 const DEFAULT_GIBS_WMS_ENDPOINT: &str = "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi";
 const DEFAULT_GIBS_TRUE_COLOR_LAYER: &str = "MODIS_Terra_CorrectedReflectance_TrueColor";
 const DEFAULT_GIBS_IMAGE_FORMAT: &str = "image/png";
+const EOX_WMS_ENDPOINT: &str = "https://tiles.maps.eox.at/wms";
+const EOX_S2CLOUDLESS_2017_LAYER: &str = "s2cloudless-2017";
+const EOX_IMAGE_FORMAT: &str = "image/jpeg";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NasaGibsImageryConfig {
     pub source_id: String,
+    pub source_kind: StreamingSourceKind,
     pub wms_endpoint: String,
     pub layer: String,
     pub image_format: String,
     pub time: Option<String>,
     pub connect_timeout: Duration,
     pub read_timeout: Duration,
+    pub fallback: Option<Box<NasaGibsImageryConfig>>,
 }
 
 impl Default for NasaGibsImageryConfig {
     fn default() -> Self {
+        Self::gibs_modis_true_color()
+    }
+}
+
+impl NasaGibsImageryConfig {
+    pub fn gibs_modis_true_color() -> Self {
         Self {
             source_id: "nasa_gibs/modis_true_color".to_string(),
+            source_kind: StreamingSourceKind::NasaGibs,
             wms_endpoint: DEFAULT_GIBS_WMS_ENDPOINT.to_string(),
             layer: DEFAULT_GIBS_TRUE_COLOR_LAYER.to_string(),
             image_format: DEFAULT_GIBS_IMAGE_FORMAT.to_string(),
             time: None,
             connect_timeout: Duration::from_secs(10),
             read_timeout: Duration::from_secs(30),
+            fallback: None,
+        }
+    }
+
+    pub fn eox_s2cloudless_2017() -> Self {
+        Self {
+            source_id: "eox/s2cloudless_2017".to_string(),
+            source_kind: StreamingSourceKind::Custom("eox_cloudless".to_string()),
+            wms_endpoint: EOX_WMS_ENDPOINT.to_string(),
+            layer: EOX_S2CLOUDLESS_2017_LAYER.to_string(),
+            image_format: EOX_IMAGE_FORMAT.to_string(),
+            time: None,
+            connect_timeout: Duration::from_secs(10),
+            read_timeout: Duration::from_secs(30),
+            fallback: Some(Box::new(Self::gibs_modis_true_color())),
         }
     }
 }
@@ -106,28 +133,39 @@ impl NasaGibsImageryProvider {
         &self,
         request: &StreamingTileRequest,
     ) -> Result<GibsGetMapRequest, StreamingProviderError> {
+        Self::plan_get_map_with_config(&self.config, request)
+    }
+
+    fn plan_get_map_with_config(
+        config: &NasaGibsImageryConfig,
+        request: &StreamingTileRequest,
+    ) -> Result<GibsGetMapRequest, StreamingProviderError> {
         validate_request(request)?;
         let bbox_lon_lat = request_lon_lat_bbox(request)?;
 
         Ok(GibsGetMapRequest {
-            endpoint: self.config.wms_endpoint.clone(),
-            layer: self.config.layer.clone(),
-            image_format: self.config.image_format.clone(),
+            endpoint: config.wms_endpoint.clone(),
+            layer: config.layer.clone(),
+            image_format: config.image_format.clone(),
             width: request.attachment_config.texture_size,
             height: request.attachment_config.texture_size,
             bbox_lon_lat,
-            time: self.config.time.clone(),
+            time: config.time.clone(),
         })
+    }
+}
+
+fn descriptor_from_config(config: &NasaGibsImageryConfig) -> StreamingSourceDescriptor {
+    StreamingSourceDescriptor {
+        source_id: config.source_id.clone(),
+        source_kind: config.source_kind.clone(),
+        attachment_kind: StreamedAttachmentKind::Imagery,
     }
 }
 
 impl StreamingTileProvider for NasaGibsImageryProvider {
     fn descriptor(&self) -> StreamingSourceDescriptor {
-        StreamingSourceDescriptor {
-            source_id: self.config.source_id.clone(),
-            source_kind: StreamingSourceKind::NasaGibs,
-            attachment_kind: StreamedAttachmentKind::Imagery,
-        }
+        descriptor_from_config(&self.config)
     }
 
     fn availability(&self, request: &StreamingTileRequest) -> StreamingSourceAvailability {
@@ -148,68 +186,7 @@ impl StreamingTileProvider for NasaGibsImageryProvider {
         &self,
         request: &StreamingTileRequest,
     ) -> Result<MaterializedStreamingTile, StreamingProviderError> {
-        let planned = self.plan_get_map(request)?;
-        let url = planned.url();
-
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(self.config.connect_timeout)
-            .timeout_read(self.config.read_timeout)
-            .timeout_write(self.config.read_timeout)
-            .build();
-
-        let response = agent.get(&url).call().map_err(map_ureq_error)?;
-
-        let content_type = response
-            .header("content-type")
-            .map(|value| value.split(';').next().unwrap_or(value).trim().to_string())
-            .unwrap_or_else(|| planned.image_format.clone());
-
-        let mut body = Vec::new();
-        response
-            .into_reader()
-            .read_to_end(&mut body)
-            .map_err(|error| {
-                StreamingProviderError::Transient(format!("gibs read failed: {error}"))
-            })?;
-
-        let source_format = ImageFormat::from_mime_type(&content_type)
-            .or_else(|| ImageFormat::from_mime_type(&planned.image_format))
-            .ok_or_else(|| {
-                StreamingProviderError::Permanent(format!(
-                    "unsupported GIBS response content type '{content_type}'"
-                ))
-            })?;
-
-        let source_image =
-            image::load_from_memory_with_format(&body, source_format).map_err(|error| {
-                StreamingProviderError::Permanent(format!("gibs image decode failed: {error}"))
-            })?;
-
-        let target_rgb = remap_source_to_tile(&source_image, request, planned.bbox_lon_lat)?;
-        let encoded_tile = encode_rgb_tiff(
-            request.attachment_config.texture_size,
-            request.attachment_config.texture_size,
-            &target_rgb,
-        )?;
-        let fetch_time_ms = current_unix_ms();
-
-        Ok(MaterializedStreamingTile {
-            bytes: encoded_tile,
-            metadata: CachedTileMetadata {
-                format_version: crate::streaming::CURRENT_STREAMING_CACHE_FORMAT_VERSION,
-                terrain_path: request.terrain_path.clone(),
-                attachment_label: request.attachment_label.clone(),
-                coordinate: request.coordinate,
-                source: self.descriptor(),
-                fetched_at_unix_ms: fetch_time_ms,
-                expires_at_unix_ms: None,
-                source_zoom: None,
-                source_revision: self.config.time.clone(),
-                source_content_hash: None,
-                source_crs: Some("EPSG:4326".to_string()),
-                encoding: CacheTileEncoding::Tiff,
-            },
-        })
+        materialize_tile_with_config(&self.config, request)
     }
 }
 
@@ -236,6 +213,143 @@ fn request_lon_lat_bbox(
     request: &StreamingTileRequest,
 ) -> Result<[f64; 4], StreamingProviderError> {
     crate::streaming::terrain_sampling::request_lon_lat_bbox(request)
+}
+
+fn materialize_tile_with_config(
+    config: &NasaGibsImageryConfig,
+    request: &StreamingTileRequest,
+) -> Result<MaterializedStreamingTile, StreamingProviderError> {
+    let planned = NasaGibsImageryProvider::plan_get_map_with_config(config, request)?;
+    let url = planned.url();
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(config.connect_timeout)
+        .timeout_read(config.read_timeout)
+        .timeout_write(config.read_timeout)
+        .build();
+
+    let response = agent.get(&url).call().map_err(map_ureq_error)?;
+
+    let content_type = response
+        .header("content-type")
+        .map(|value| value.split(';').next().unwrap_or(value).trim().to_string())
+        .unwrap_or_else(|| planned.image_format.clone());
+
+    let mut body = Vec::new();
+    response
+        .into_reader()
+        .read_to_end(&mut body)
+        .map_err(|error| StreamingProviderError::Transient(format!("gibs read failed: {error}")))?;
+
+    let source_image = match decode_source_image(&body, &content_type, &planned.image_format) {
+        Ok(image) => image,
+        Err(error) => {
+            if let Some(fallback) = &config.fallback {
+                bevy::log::warn!(
+                    "Imagery source {} failed for {:?}: {}. Retrying with fallback {}",
+                    config.source_id,
+                    request.coordinate,
+                    error,
+                    fallback.source_id,
+                );
+                return materialize_tile_with_config(fallback, request);
+            }
+
+            return Err(error);
+        }
+    };
+
+    let target_rgb = remap_source_to_tile(&source_image, request, planned.bbox_lon_lat)?;
+    if imagery_looks_like_blank_fill(&target_rgb) {
+        if let Some(fallback) = &config.fallback {
+            bevy::log::warn!(
+                "Imagery source {} produced a near-blank tile for {:?}; retrying with fallback {}",
+                config.source_id,
+                request.coordinate,
+                fallback.source_id,
+            );
+            return materialize_tile_with_config(fallback, request);
+        }
+    }
+
+    let encoded_tile = encode_rgb_tiff(
+        request.attachment_config.texture_size,
+        request.attachment_config.texture_size,
+        &target_rgb,
+    )?;
+    let fetch_time_ms = current_unix_ms();
+
+    Ok(MaterializedStreamingTile {
+        bytes: encoded_tile,
+        metadata: CachedTileMetadata {
+            format_version: crate::streaming::CURRENT_STREAMING_CACHE_FORMAT_VERSION,
+            terrain_path: request.terrain_path.clone(),
+            attachment_label: request.attachment_label.clone(),
+            coordinate: request.coordinate,
+            source: descriptor_from_config(config),
+            fetched_at_unix_ms: fetch_time_ms,
+            expires_at_unix_ms: None,
+            source_zoom: None,
+            source_revision: config.time.clone(),
+            source_content_hash: None,
+            source_crs: Some("EPSG:4326".to_string()),
+            encoding: CacheTileEncoding::Tiff,
+        },
+    })
+}
+
+fn decode_source_image(
+    body: &[u8],
+    content_type: &str,
+    planned_image_format: &str,
+) -> Result<DynamicImage, StreamingProviderError> {
+    let guessed_format = image::guess_format(body).ok();
+    let source_format = guessed_format
+        .or_else(|| ImageFormat::from_mime_type(content_type))
+        .or_else(|| ImageFormat::from_mime_type(planned_image_format))
+        .ok_or_else(|| {
+            StreamingProviderError::Permanent(format!(
+                "unsupported imagery response content type '{content_type}'"
+            ))
+        })?;
+
+    if guessed_format.is_none() && response_looks_like_error_document(body) {
+        return Err(StreamingProviderError::Permanent(format!(
+            "imagery source returned a non-image response (content_type='{content_type}', preview='{}')",
+            response_preview(body)
+        )));
+    }
+
+    image::load_from_memory_with_format(body, source_format).map_err(|error| {
+        StreamingProviderError::Permanent(format!(
+            "imagery decode failed (content_type='{content_type}', format={source_format:?}): {error}"
+        ))
+    })
+}
+
+fn response_looks_like_error_document(body: &[u8]) -> bool {
+    let prefix = body
+        .iter()
+        .copied()
+        .skip_while(|byte| byte.is_ascii_whitespace())
+        .take(96)
+        .collect::<Vec<_>>();
+    let prefix = String::from_utf8_lossy(&prefix).to_ascii_lowercase();
+
+    prefix.starts_with("<!doctype")
+        || prefix.starts_with("<html")
+        || prefix.starts_with("<?xml")
+        || prefix.starts_with("<serviceexceptionreport")
+        || prefix.starts_with("<ows:exceptionreport")
+}
+
+fn response_preview(body: &[u8]) -> String {
+    String::from_utf8_lossy(&body[..body.len().min(160)])
+        .replace('\n', " ")
+        .replace('\r', " ")
+        .chars()
+        .take(160)
+        .collect()
 }
 
 fn remap_source_to_tile(
@@ -280,6 +394,25 @@ fn remap_source_to_tile(
     }
 
     Ok(remapped)
+}
+
+fn imagery_looks_like_blank_fill(rgb_bytes: &[u8]) -> bool {
+    if rgb_bytes.is_empty() {
+        return true;
+    }
+
+    let mut min_value = u8::MAX;
+    let mut max_value = u8::MIN;
+    let mut sum = 0_u64;
+
+    for &value in rgb_bytes {
+        min_value = min_value.min(value);
+        max_value = max_value.max(value);
+        sum += value as u64;
+    }
+
+    let mean_value = sum as f64 / rgb_bytes.len() as f64;
+    max_value.saturating_sub(min_value) <= 6 && !(20.0..=235.0).contains(&mean_value)
 }
 
 fn bilinear_sample_rgb8(image: &image::RgbImage, u: f64, v: f64) -> [u8; 3] {
@@ -356,6 +489,7 @@ mod tests {
     use super::*;
     use crate::{
         math::{TerrainShape, TileCoordinate},
+        streaming::StreamingRequestPriority,
         terrain_data::{AttachmentConfig, AttachmentFormat, AttachmentLabel},
     };
     use bevy::math::IVec2;
@@ -374,6 +508,7 @@ mod tests {
             coordinate: tile,
             terrain_shape: TerrainShape::WGS84,
             terrain_lod_count: 5,
+            priority: StreamingRequestPriority::Background,
         }
     }
 
@@ -410,5 +545,37 @@ mod tests {
             provider.availability(&request),
             StreamingSourceAvailability::Unavailable { .. }
         ));
+    }
+
+    #[test]
+    fn blank_fill_detection_flags_near_uniform_extremes() {
+        assert!(imagery_looks_like_blank_fill(&[240; 128 * 128 * 3]));
+        assert!(imagery_looks_like_blank_fill(&[5; 128 * 128 * 3]));
+
+        let mut textured = vec![140_u8; 128 * 128 * 3];
+        textured[0] = 10;
+        textured[1] = 200;
+        assert!(!imagery_looks_like_blank_fill(&textured));
+    }
+
+    #[test]
+    fn eox_config_includes_modis_fallback() {
+        let config = NasaGibsImageryConfig::eox_s2cloudless_2017();
+        let fallback = config.fallback.expect("EOX preset should install fallback");
+        assert_eq!(fallback.source_id, "nasa_gibs/modis_true_color");
+    }
+
+    #[test]
+    fn html_response_is_reported_as_non_image() {
+        let error = decode_source_image(
+            b"<!DOCTYPE html><html><body>blocked</body></html>",
+            "text/html",
+            "image/png",
+        )
+        .expect_err("HTML bodies should be rejected before PNG decode");
+
+        let message = error.to_string();
+        assert!(message.contains("non-image response"));
+        assert!(message.contains("text/html"));
     }
 }

@@ -1,11 +1,16 @@
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
-use bevy_terrain::{math::geodesy::unit_from_lat_lon_degrees, prelude::*};
+use bevy_terrain::{
+    math::geodesy::unit_from_lat_lon_degrees,
+    prelude::*,
+    streaming::NasaGibsImageryConfig,
+};
 use std::{env, path::PathBuf, process};
 
 const RADIUS: f64 = 6_371_000.0;
 const DEFAULT_TERRAIN_ROOT: &str = "terrains/earth";
 const MAX_LOD_ENV: &str = "MINIMAL_GLOBE_MAX_LOD";
+const IMAGERY_PRESET_ENV: &str = "TERRAIN_STREAM_IMAGERY_PRESET";
 const STREAMING_CACHE_ROOT_ENV: &str = "TERRAIN_STREAMING_CACHE_ROOT";
 const STREAM_ONLINE_ENV: &str = "TERRAIN_STREAM_ONLINE";
 const STREAM_HEIGHT_ENV: &str = "TERRAIN_STREAM_HEIGHT";
@@ -48,6 +53,7 @@ fn main() {
     ))
     .insert_resource(options.clone())
     .insert_resource(terrain_settings_from_options(&options))
+    .insert_resource(imagery_provider_for_minimal())
     .add_systems(Startup, setup);
 
     if let Some(streaming_settings) = streaming_settings_from_options(&options) {
@@ -116,6 +122,7 @@ fn print_usage_and_exit(code: i32) -> ! {
          - {STREAMING_CACHE_ROOT_ENV}=streaming_cache\n\
          - {STREAM_ONLINE_ENV}=1\n\
          - {STREAM_HEIGHT_ENV}=1\n\
+         - {IMAGERY_PRESET_ENV}=eox_s2cloudless_2017|gibs_modis\n\
          - {CAMERA_TARGET_LAT_ENV}=46.55\n\
          - {CAMERA_TARGET_LON_ENV}=10.60\n\
          - {CAMERA_ALTITUDE_ENV}=120000\n\
@@ -185,6 +192,25 @@ fn env_var_enabled(name: &str) -> bool {
         env::var(name).ok().as_deref(),
         Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
     )
+}
+
+fn imagery_provider_for_minimal() -> NasaGibsImageryProvider {
+    match env::var(IMAGERY_PRESET_ENV).ok().as_deref() {
+        Some("gibs_modis") => {
+            info!("Minimal Globe imagery preset: gibs_modis");
+            NasaGibsImageryProvider::new(NasaGibsImageryConfig::gibs_modis_true_color())
+        }
+        Some("eox_s2cloudless_2017") | None => {
+            info!("Minimal Globe imagery preset: eox_s2cloudless_2017");
+            NasaGibsImageryProvider::new(NasaGibsImageryConfig::eox_s2cloudless_2017())
+        }
+        Some(other) => {
+            warn!(
+                "Unknown TERRAIN_STREAM_IMAGERY_PRESET={other}. Falling back to eox_s2cloudless_2017."
+            );
+            NasaGibsImageryProvider::new(NasaGibsImageryConfig::eox_s2cloudless_2017())
+        }
+    }
 }
 
 fn env_f32(name: &str, default: f32) -> f32 {
