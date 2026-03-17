@@ -76,7 +76,21 @@ fn ensure_registered_source(
     let manifest_path = StreamingCacheManifest::path_for(&terrain_root);
 
     let mut manifest = if manifest_path.is_file() {
-        StreamingCacheManifest::load_file(&manifest_path)?
+        match StreamingCacheManifest::load_file(&manifest_path) {
+            Ok(manifest) => manifest,
+            Err(StreamingCacheManifestError::Ron(error)) => {
+                bevy::log::warn!(
+                    "Streaming cache manifest at {} was malformed ({}). Recreating it so streamed tiles can keep writing.",
+                    manifest_path.display(),
+                    error
+                );
+                StreamingCacheManifest {
+                    terrain_path: metadata.terrain_path.clone(),
+                    ..Default::default()
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
     } else {
         StreamingCacheManifest {
             terrain_path: metadata.terrain_path.clone(),
@@ -168,6 +182,53 @@ mod tests {
             StreamingCacheManifest::path_for(asset_root.join("streaming_cache/terrains/earth"))
                 .is_file()
         );
+
+        fs::remove_dir_all(asset_root).unwrap();
+    }
+
+    #[test]
+    fn writer_recovers_from_malformed_manifest() {
+        let asset_root = unique_temp_dir();
+        let cache_root = PathBuf::from("streaming_cache");
+        let terrain_root = asset_root.join(cache_terrain_root(&cache_root, "terrains/earth"));
+        fs::create_dir_all(&terrain_root).unwrap();
+        fs::write(
+            StreamingCacheManifest::path_for(&terrain_root),
+            "{ definitely_not_ron: true }\n",
+        )
+        .unwrap();
+
+        let tile = MaterializedStreamingTile {
+            bytes: b"tile".to_vec(),
+            metadata: CachedTileMetadata {
+                format_version: crate::streaming::CURRENT_STREAMING_CACHE_FORMAT_VERSION,
+                terrain_path: "terrains/earth".to_string(),
+                attachment_label: AttachmentLabel::Height,
+                coordinate: TileCoordinate::new(1, 2, IVec2::new(3, 4)),
+                source: StreamingSourceDescriptor {
+                    source_id: "opentopography/aw3d30_e".to_string(),
+                    source_kind: StreamingSourceKind::OpenTopography,
+                    attachment_kind: crate::streaming::StreamedAttachmentKind::Height,
+                },
+                fetched_at_unix_ms: 1,
+                expires_at_unix_ms: None,
+                source_zoom: None,
+                source_revision: None,
+                source_content_hash: None,
+                source_crs: Some("EPSG:4326".to_string()),
+                encoding: CacheTileEncoding::Tiff,
+            },
+        };
+
+        write_materialized_tile(&asset_root, &cache_root, &tile)
+            .expect("writer should recreate malformed manifests");
+
+        let manifest = StreamingCacheManifest::load_file(
+            StreamingCacheManifest::path_for(asset_root.join("streaming_cache/terrains/earth")),
+        )
+        .expect("recreated manifest should be valid RON");
+        assert_eq!(manifest.terrain_path, "terrains/earth");
+        assert_eq!(manifest.sources.len(), 1);
 
         fs::remove_dir_all(asset_root).unwrap();
     }

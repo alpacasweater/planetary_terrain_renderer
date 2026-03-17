@@ -1,5 +1,6 @@
 use crate::{math::TileCoordinate, terrain_data::AttachmentLabel};
 use ron::{de::from_str, ser::to_string_pretty};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error,
@@ -78,7 +79,7 @@ impl Default for StreamingCacheManifest {
 impl StreamingCacheManifest {
     pub fn load_file<P: AsRef<Path>>(path: P) -> Result<Self, StreamingCacheManifestError> {
         let encoded = fs::read_to_string(path)?;
-        Ok(from_str(&encoded)?)
+        parse_ron_document(&encoded)
     }
 
     pub fn save_file<P: AsRef<Path>>(&self, path: P) -> Result<(), StreamingCacheManifestError> {
@@ -125,7 +126,7 @@ impl CachedTileMetadata {
 
     pub fn load_file<P: AsRef<Path>>(path: P) -> Result<Self, StreamingCacheManifestError> {
         let encoded = fs::read_to_string(path)?;
-        Ok(from_str(&encoded)?)
+        parse_ron_document(&encoded)
     }
 
     pub fn save_file<P: AsRef<Path>>(&self, path: P) -> Result<(), StreamingCacheManifestError> {
@@ -204,6 +205,14 @@ impl From<ron::Error> for StreamingCacheManifestError {
     }
 }
 
+fn parse_ron_document<T: DeserializeOwned>(encoded: &str) -> Result<T, StreamingCacheManifestError> {
+    Ok(from_str(strip_utf8_bom(encoded))?)
+}
+
+fn strip_utf8_bom(encoded: &str) -> &str {
+    encoded.strip_prefix('\u{feff}').unwrap_or(encoded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,6 +257,45 @@ mod tests {
 
         let encoded = to_string_pretty(&metadata, Default::default()).unwrap();
         let decoded: CachedTileMetadata = from_str(&encoded).unwrap();
+        assert_eq!(decoded, metadata);
+    }
+
+    #[test]
+    fn manifest_load_tolerates_utf8_bom() {
+        let encoded = "\u{feff}(\n    format_version: 1,\n    terrain_path: \"terrains/earth\",\n    sources: [],\n)\n";
+
+        let decoded: StreamingCacheManifest = parse_ron_document(encoded).unwrap();
+        assert_eq!(decoded.format_version, 1);
+        assert_eq!(decoded.terrain_path, "terrains/earth");
+        assert!(decoded.sources.is_empty());
+    }
+
+    #[test]
+    fn metadata_load_tolerates_utf8_bom() {
+        let metadata = CachedTileMetadata {
+            format_version: CURRENT_STREAMING_CACHE_FORMAT_VERSION,
+            terrain_path: "terrains/earth".to_string(),
+            attachment_label: AttachmentLabel::Height,
+            coordinate: TileCoordinate::new(2, 3, IVec2::new(4, 5)),
+            source: StreamingSourceDescriptor {
+                source_id: "opentopography/aw3d30_e".to_string(),
+                source_kind: StreamingSourceKind::OpenTopography,
+                attachment_kind: StreamedAttachmentKind::Height,
+            },
+            fetched_at_unix_ms: 10,
+            expires_at_unix_ms: None,
+            source_zoom: None,
+            source_revision: None,
+            source_content_hash: None,
+            source_crs: Some("EPSG:4326".to_string()),
+            encoding: CacheTileEncoding::Tiff,
+        };
+        let encoded = format!(
+            "\u{feff}{}",
+            to_string_pretty(&metadata, Default::default()).unwrap()
+        );
+
+        let decoded: CachedTileMetadata = parse_ron_document(&encoded).unwrap();
         assert_eq!(decoded, metadata);
     }
 
