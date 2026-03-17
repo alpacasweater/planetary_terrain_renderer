@@ -11,3 +11,5 @@ assets/terrains/*
 !assets/terrains/earth/
 !assets/terrains/earth/**
 source_data
+.env*.local
+.env.local

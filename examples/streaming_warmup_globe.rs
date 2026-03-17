@@ -51,6 +51,9 @@ struct WarmupRuntime {
 }
 
 fn main() {
+    // Load .env.opentopography.local if present (does not override already-set env vars).
+    let _ = dotenvy::from_filename(".env.opentopography.local");
+
     let terrain_root = env::args()
         .nth(1)
         .unwrap_or_else(|| DEFAULT_TERRAIN_ROOT.to_string());
@@ -90,7 +93,9 @@ fn terrain_settings_for_warmup() -> TerrainSettings {
 
     if !height_streaming_enabled() {
         info!(
-            "OpenTopography API key not found. Warmup demo will stream imagery only. Source `./.env.opentopography.local` to include height."
+            "OpenTopography API key not found — warmup demo will stream imagery only. \
+             To include height data, add your key to .env.opentopography.local: \
+             OPENTOPOGRAPHY_API_KEY=your-key-here"
         );
     }
 

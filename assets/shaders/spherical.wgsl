@@ -28,13 +28,13 @@ fn sample_albedo(tile: AtlasTile) -> vec4<f32> {
 }
 
 fn color_earth(tile: AtlasTile) -> vec4<f32> {
-   let height = sample_height(tile);
+    let height = sample_height(tile);
 
-    if (height < 0.0) {  
+    if height < 0.0 {
+        // Below sea level: tint with deep-blue gradient.
         return textureSampleLevel(gradient, gradient_sampler, vec2<f32>(mix(0.0, 0.075, pow(height / terrain.min_height, 0.25)), 0.5), 0.0);
     } else {
         return sample_albedo(tile);
-//        return textureSampleLevel(gradient, gradient_sampler, vec2<f32>(mix(0.09, 0.6, pow(height / terrain.max_height * 1.4, 1.0)), 0.5), 0.0);
     }
 }
 
@@ -76,23 +76,7 @@ fn fragment(input: FragmentInput) -> FragmentOutput {
     var color            = sample_color(tile);
     var surface_gradient = sample_surface_gradient(tile, info.tangent_space);
 
-//    let uv_res_per_pixel = max(length(tile.coordinate.uv_dx), length(tile.coordinate.uv_dy)) * attachments.height.center_size;
-//
-//    if (uv_res_per_pixel > 2.0) {
-//        color = vec4<f32>(0.0, 0.0, 0.0, 1.0);
-//    } else {
-//        color = vec4<f32>(2.0 - uv_res_per_pixel, 0.0, 0.0, 1.0);
-//    }
-
-//    color = textureSampleLevel(gradient, gradient_sampler, vec2<f32>(uv_res_per_pixel / 10.0 , 0.5), 0.0);
-//    color = vec4<f32>(log2(uv_res_per_pixel), 0.0, 0.0, 1.0);
-
     if mask { discard; }
-
-//    color = vec4(vec3(0.3), 1.0);
-//    color = slope_gradient(info.world_coordinate.normal, surface_gradient);
-
-//    if (distance(info.world_coordinate.position, bevy_terrain::bindings::view.world_position) > terrain.scale.y / 2.0 * 0.987) { color = vec4(1.0, 0.0, 0.0, 1.0); }
 
     var output: FragmentOutput;
 #ifdef LIGHTING

@@ -13,6 +13,9 @@ const STREAMING_MAX_LOD_ENV: &str = "TERRAIN_STREAMING_MAX_LOD";
 const DEFAULT_STREAMING_MAX_LOD: u32 = 6;
 
 fn main() {
+    // Load .env.opentopography.local if present (does not override already-set env vars).
+    let _ = dotenvy::from_filename(".env.opentopography.local");
+
     let mut app = App::new();
     app.add_plugins((
         DefaultPlugins
@@ -58,7 +61,14 @@ fn streaming_settings_from_env() -> Option<TerrainStreamingSettings> {
         return None;
     }
 
-    Some(if env_var_enabled(STREAM_HEIGHT_ENV) {
+    let height_disabled_explicitly = matches!(
+        env::var(STREAM_HEIGHT_ENV).ok().as_deref(),
+        Some("0") | Some("false") | Some("FALSE") | Some("no") | Some("NO")
+    );
+    let stream_height = env_var_enabled(STREAM_HEIGHT_ENV)
+        || (height_api_key_present() && !height_disabled_explicitly);
+
+    Some(if stream_height {
         TerrainStreamingSettings::online_imagery_and_height()
     } else {
         TerrainStreamingSettings::online_imagery()
@@ -66,7 +76,17 @@ fn streaming_settings_from_env() -> Option<TerrainStreamingSettings> {
 }
 
 fn streaming_requested() -> bool {
-    env_var_enabled(STREAM_ONLINE_ENV) || env_var_enabled(STREAM_HEIGHT_ENV)
+    // Also treat API key presence as implicit request for height (and thus online) streaming.
+    env_var_enabled(STREAM_ONLINE_ENV)
+        || env_var_enabled(STREAM_HEIGHT_ENV)
+        || height_api_key_present()
+}
+
+fn height_api_key_present() -> bool {
+    env::var("OPENTOPOGRAPHY_API_KEY")
+        .or_else(|_| env::var("OPEN_TOPOGRAPHY_API_KEY"))
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn streaming_target_lod_count_from_env() -> Option<u32> {

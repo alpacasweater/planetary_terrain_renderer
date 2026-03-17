@@ -13,14 +13,19 @@ const STREAMING_CACHE_ROOT_ENV: &str = "TERRAIN_STREAMING_CACHE_ROOT";
 const STREAM_ONLINE_ENV: &str = "TERRAIN_STREAM_ONLINE";
 const STREAM_HEIGHT_ENV: &str = "TERRAIN_STREAM_HEIGHT";
 const STREAMING_MAX_LOD_ENV: &str = "TERRAIN_STREAMING_MAX_LOD";
-const DEFAULT_MAX_LOD: u32 = 7;
+// LOD 10 gives ~78 m/pixel tiles (near OpenTopography AW3D30 native resolution).
+const DEFAULT_MAX_LOD: u32 = 10;
 const CAMERA_TARGET_LAT_ENV: &str = "MINIMAL_GLOBE_TARGET_LAT";
 const CAMERA_TARGET_LON_ENV: &str = "MINIMAL_GLOBE_TARGET_LON";
 const CAMERA_ALTITUDE_ENV: &str = "MINIMAL_GLOBE_CAMERA_ALTITUDE_M";
 const CAMERA_BACKOFF_ENV: &str = "MINIMAL_GLOBE_CAMERA_BACKOFF_M";
-const DEFAULT_CAMERA_ALTITUDE_M: f32 = 40_000.0;
-const DEFAULT_CAMERA_BACKOFF_M: f32 = 18_000.0;
-const DEFAULT_HEIGHT_STREAM_MAX_INFLIGHT: usize = 2;
+// Default camera looks over the Himalaya — the most dramatic terrain on Earth.
+const DEFAULT_TARGET_LAT_DEG: f64 = 27.988; // Everest region, Nepal
+const DEFAULT_TARGET_LON_DEG: f64 = 86.925;
+const DEFAULT_CAMERA_ALTITUDE_M: f32 = 10_000.0;
+const DEFAULT_CAMERA_BACKOFF_M: f32 = 4_000.0;
+// 8 concurrent height requests fills the streaming queue faster during initial tile warm-up.
+const DEFAULT_HEIGHT_STREAM_MAX_INFLIGHT: usize = 8;
 
 #[derive(Resource, Clone, Debug)]
 struct MinimalGlobeOptions {
@@ -64,12 +69,30 @@ fn main() {
 
 impl MinimalGlobeOptions {
     fn from_env_and_args() -> Self {
+        // Load .env.opentopography.local if present (does not override already-set env vars).
+        let _ = dotenvy::from_filename(".env.opentopography.local");
+
         let mut terrain_root = None;
         let mut max_lod = env_u32(MAX_LOD_ENV)
             .or_else(|| env_u32(STREAMING_MAX_LOD_ENV))
             .unwrap_or(DEFAULT_MAX_LOD);
         let mut stream_online = env_var_enabled(STREAM_ONLINE_ENV);
         let mut stream_height = env_var_enabled(STREAM_HEIGHT_ENV);
+
+        // Auto-enable height streaming when the API key is available and the user has not
+        // explicitly disabled it by setting TERRAIN_STREAM_HEIGHT=0/false/no.
+        let api_key_present = env::var("OPENTOPOGRAPHY_API_KEY")
+            .or_else(|_| env::var("OPEN_TOPOGRAPHY_API_KEY"))
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
+        let height_disabled_explicitly = matches!(
+            env::var(STREAM_HEIGHT_ENV).ok().as_deref(),
+            Some("0") | Some("false") | Some("FALSE") | Some("no") | Some("NO")
+        );
+        if api_key_present && !height_disabled_explicitly {
+            stream_height = true;
+            stream_online = true;
+        }
 
         let mut args = env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -114,23 +137,48 @@ impl MinimalGlobeOptions {
 
 fn print_usage_and_exit(code: i32) -> ! {
     let usage = format!(
-        "Usage: cargo run --example minimal_globe -- [terrain_root] [--max-lod N] [--stream-online] [--stream-height]\n\
+        "Minimal Globe — streams a live Earth terrain with satellite imagery and real elevation.\n\
          \n\
-         Environment overrides:\n\
-         - {MAX_LOD_ENV}=N\n\
-         - {STREAMING_CACHE_ROOT_ENV}=streaming_cache\n\
-         - {STREAM_ONLINE_ENV}=1\n\
-         - {STREAM_HEIGHT_ENV}=1\n\
-         - {IMAGERY_PRESET_ENV}=eox_s2cloudless_2017|gibs_modis\n\
-         - {CAMERA_TARGET_LAT_ENV}=46.55\n\
-         - {CAMERA_TARGET_LON_ENV}=10.60\n\
-         - {CAMERA_ALTITUDE_ENV}=120000\n\
-         - {CAMERA_BACKOFF_ENV}=80000\n\
+         USAGE:\n\
+             cargo run --example minimal_globe [OPTIONS] [terrain_root]\n\
          \n\
-         Height streaming examples:\n\
-         - POSIX shells: OPENTOPOGRAPHY_API_KEY=your-key cargo run --example minimal_globe -- --max-lod 7 --stream-height\n\
-         - PowerShell: $env:OPENTOPOGRAPHY_API_KEY=\"your-key\"; cargo run --example minimal_globe -- --max-lod 7 --stream-height\n\
-         - cmd.exe: set OPENTOPOGRAPHY_API_KEY=your-key && cargo run --example minimal_globe -- --max-lod 7 --stream-height\n"
+         OPTIONS:\n\
+             --stream-height         Enable elevation streaming via OpenTopography.\n\
+                                     Auto-enabled when OPENTOPOGRAPHY_API_KEY is present.\n\
+             --stream-online         Enable imagery-only streaming (no elevation).\n\
+             --max-lod <N>           Maximum streamed LOD, default {DEFAULT_MAX_LOD}.\n\
+             --terrain-root <PATH>   Asset-relative path to terrain folder,\n\
+                                     default \"{DEFAULT_TERRAIN_ROOT}\".\n\
+             -h, --help              Print this message.\n\
+         \n\
+         ENVIRONMENT:\n\
+             OPENTOPOGRAPHY_API_KEY  Your OpenTopography API key. Place it in\n\
+                                     .env.opentopography.local (auto-loaded) or set it\n\
+                                     in your shell. Height streaming activates automatically.\n\
+             {STREAM_HEIGHT_ENV}=0   Disable auto height streaming even if key is present.\n\
+             {STREAM_ONLINE_ENV}=1   Force imagery-only streaming without a key.\n\
+             {MAX_LOD_ENV}=N         Override max LOD via environment.\n\
+             {STREAMING_CACHE_ROOT_ENV}=<path>  Override streaming tile cache path.\n\
+             {IMAGERY_PRESET_ENV}=eox_s2cloudless_2017|gibs_modis  Choose imagery source.\n\
+             {CAMERA_TARGET_LAT_ENV}=<deg>  Camera target latitude  (default: {DEFAULT_TARGET_LAT_DEG})\n\
+             {CAMERA_TARGET_LON_ENV}=<deg>  Camera target longitude (default: {DEFAULT_TARGET_LON_DEG})\n\
+             {CAMERA_ALTITUDE_ENV}=<m>      Camera altitude in metres\n\
+             {CAMERA_BACKOFF_ENV}=<m>       Camera northward offset in metres\n\
+         \n\
+         QUICK START:\n\
+             1. Add your OpenTopography API key to .env.opentopography.local:\n\
+                    OPENTOPOGRAPHY_API_KEY=your-key-here\n\
+             2. Run:\n\
+                    cargo run --example minimal_globe\n\
+             3. The camera opens over the Himalaya at 25 km altitude.\n\
+                Height and imagery stream in progressively — mountains are\n\
+                visible within about 30 seconds on a typical connection.\n\
+         \n\
+         CONTROLS:\n\
+             Scroll / right-drag   Zoom in/out\n\
+             Left-drag             Pan\n\
+             Middle-drag           Orbit\n\
+             T                     Toggle fly camera\n"
     );
     if code == 0 {
         println!("{usage}");
@@ -232,10 +280,6 @@ fn env_f64(name: &str) -> Option<f64> {
         .and_then(|value| value.trim().parse::<f64>().ok())
 }
 
-fn camera_transform_for_overview() -> Transform {
-    Transform::from_translation(-Vec3::X * RADIUS as f32 * 3.0).looking_to(Vec3::X, Vec3::Y)
-}
-
 fn camera_transform_for_focus(
     lat_deg: f64,
     lon_deg: f64,
@@ -259,18 +303,16 @@ fn camera_transform_for_focus(
 }
 
 fn initial_camera_transform_from_env() -> Transform {
-    match (
-        env_f64(CAMERA_TARGET_LAT_ENV),
-        env_f64(CAMERA_TARGET_LON_ENV),
-    ) {
-        (Some(lat_deg), Some(lon_deg)) => camera_transform_for_focus(
-            lat_deg,
-            lon_deg,
-            env_f32(CAMERA_ALTITUDE_ENV, DEFAULT_CAMERA_ALTITUDE_M),
-            env_f32(CAMERA_BACKOFF_ENV, DEFAULT_CAMERA_BACKOFF_M),
-        ),
-        _ => camera_transform_for_overview(),
-    }
+    // Always start with a focused view over terrain. Default is the Himalaya so that
+    // elevation relief is immediately apparent once streaming tiles arrive.
+    let lat_deg = env_f64(CAMERA_TARGET_LAT_ENV).unwrap_or(DEFAULT_TARGET_LAT_DEG);
+    let lon_deg = env_f64(CAMERA_TARGET_LON_ENV).unwrap_or(DEFAULT_TARGET_LON_DEG);
+    camera_transform_for_focus(
+        lat_deg,
+        lon_deg,
+        env_f32(CAMERA_ALTITUDE_ENV, DEFAULT_CAMERA_ALTITUDE_M),
+        env_f32(CAMERA_BACKOFF_ENV, DEFAULT_CAMERA_BACKOFF_M),
+    )
 }
 
 fn setup(
@@ -291,49 +333,62 @@ fn setup(
         return;
     }
 
-    info!(
-        "Controls: scroll or right-drag to zoom, left-drag to pan, middle-drag to orbit, T toggles fly camera. Use --max-lod N or {MAX_LOD_ENV}=N to change the refinement ceiling."
-    );
+    let api_key_set = env::var("OPENTOPOGRAPHY_API_KEY")
+        .or_else(|_| env::var("OPEN_TOPOGRAPHY_API_KEY"))
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
 
     if let Ok(config) = TerrainConfig::load_file(&terrain_config_fs) {
+        let effective_max_lod = options.max_lod.max(config.lod_count);
+        let imagery_status = if options.stream_online { "ON (streaming)" } else { "off (local only)" };
+        let height_status = if options.stream_height && api_key_set {
+            "ON (streaming via OpenTopography)"
+        } else if options.stream_height && !api_key_set {
+            "DISABLED — OPENTOPOGRAPHY_API_KEY not set"
+        } else {
+            "off (local only)"
+        };
+        let target_lat = env_f64(CAMERA_TARGET_LAT_ENV).unwrap_or(DEFAULT_TARGET_LAT_DEG);
+        let target_lon = env_f64(CAMERA_TARGET_LON_ENV).unwrap_or(DEFAULT_TARGET_LON_DEG);
+
         info!(
-            "Minimal Globe target max LOD: {} (local terrain base lod_count={}).",
-            options.max_lod.max(config.lod_count),
-            config.lod_count
+            "\n  === Minimal Globe Configuration ===\n\n  \
+             Terrain root:     {terrain_root}\n  \
+             Base LODs:        {} (from terrain config)\n  \
+             Streaming target: LOD {effective_max_lod}\n  \
+             Imagery:          {imagery_status}\n  \
+             Height:           {height_status}\n  \
+             Camera target:    lat={target_lat:.3} lon={target_lon:.3} at {} m altitude\n\n  \
+             Controls: scroll/right-drag=zoom, left-drag=pan, middle-drag=orbit, T=fly cam\n  \
+             Run with --help for all options.",
+            config.lod_count,
+            env_f32(CAMERA_ALTITUDE_ENV, DEFAULT_CAMERA_ALTITUDE_M) as u32,
         );
 
-        if options.stream_height && env::var("OPENTOPOGRAPHY_API_KEY").is_err() {
+        if options.stream_height && !api_key_set {
             warn!(
-                "--stream-height was requested, but OPENTOPOGRAPHY_API_KEY is not set. The example will keep falling back to locally available height."
+                "Height streaming requested but OPENTOPOGRAPHY_API_KEY is not set. \
+                 Add it to .env.opentopography.local (auto-loaded) or set it in your shell. \
+                 Run with --help for instructions."
             );
         }
 
-        if options.max_lod > config.lod_count {
-            if options.stream_height {
-                info!(
-                    "Height streaming is enabled, so the renderer can refine beyond the local terrain asset up to LOD {}.",
-                    options.max_lod
-                );
-            } else {
-                warn!(
-                    "Requested max LOD {} exceeds locally available lod_count={}. For actual terrain detail at that LOD, use --stream-height (or TERRAIN_STREAM_HEIGHT=1) with OPENTOPOGRAPHY_API_KEY, or point {} at a warmed cache.",
-                    options.max_lod, config.lod_count, STREAMING_CACHE_ROOT_ENV
-                );
-            }
+        if options.max_lod > config.lod_count && !options.stream_height {
+            warn!(
+                "Max LOD {} exceeds the local terrain's lod_count={}. \
+                 Terrain will look coarse beyond LOD {}. \
+                 Add OPENTOPOGRAPHY_API_KEY to .env.opentopography.local for live height streaming.",
+                options.max_lod, config.lod_count, config.lod_count
+            );
         }
 
-        if terrain_root == DEFAULT_TERRAIN_ROOT && config.lod_count < 5 {
-            if options.stream_height {
-                info!(
-                    "Bundled Earth local fallback is a coarse starter dataset (lod_count={}), but height streaming is enabled so close-pass terrain can refine beyond the bundled asset.",
-                    config.lod_count
-                );
-            } else {
-                warn!(
-                    "Bundled Earth is a coarse starter dataset (lod_count={}). Steep relief like the Alps will look soft unless you use a higher-resolution terrain root, cached higher-LOD tiles, or TERRAIN_STREAM_HEIGHT=1 with OpenTopography.",
-                    config.lod_count
-                );
-            }
+        if terrain_root == DEFAULT_TERRAIN_ROOT && config.lod_count < 5 && !options.stream_height {
+            warn!(
+                "Bundled Earth dataset is a coarse starter (lod_count={}). \
+                 Mountains will look soft at close range without height streaming. \
+                 Add OPENTOPOGRAPHY_API_KEY to .env.opentopography.local to stream real elevation.",
+                config.lod_count
+            );
         }
     }
 
@@ -350,9 +405,16 @@ fn setup(
             .id();
     });
 
+    // grid_size 32 gives 32×32 mesh vertices per tile — 4× more geometric detail than
+    // the default 16, needed to represent ~78 m/pixel height data at LOD 10.
+    let view_config = TerrainViewConfig {
+        grid_size: 32,
+        ..TerrainViewConfig::default()
+    };
+
     commands.spawn_terrain(
         asset_server.load(terrain_config),
-        TerrainViewConfig::default(),
+        view_config,
         SimpleTerrainMaterial::for_terrain(&asset_server, &mut loading_images, &terrain_root),
         view,
     );
