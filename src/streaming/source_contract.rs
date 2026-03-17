@@ -7,6 +7,13 @@ use crate::{
 };
 use std::{error::Error, fmt};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum StreamingRequestPriority {
+    #[default]
+    Background,
+    Focused,
+}
+
 #[derive(Clone, Debug)]
 pub struct StreamingTileRequest {
     pub terrain_path: String,
@@ -15,6 +22,7 @@ pub struct StreamingTileRequest {
     pub coordinate: TileCoordinate,
     pub terrain_shape: TerrainShape,
     pub terrain_lod_count: u32,
+    pub priority: StreamingRequestPriority,
 }
 
 impl StreamingTileRequest {
@@ -148,6 +156,7 @@ mod tests {
             coordinate: TileCoordinate::new(0, 1, IVec2::new(2, 3)),
             terrain_shape: TerrainShape::WGS84,
             terrain_lod_count: 6,
+            priority: StreamingRequestPriority::Background,
         };
 
         assert_eq!(request.attachment_kind(), StreamedAttachmentKind::Imagery);
@@ -163,6 +172,7 @@ mod tests {
             coordinate: TileCoordinate::new(0, 1, IVec2::new(2, 3)),
             terrain_shape: TerrainShape::WGS84,
             terrain_lod_count: 6,
+            priority: StreamingRequestPriority::Background,
         };
 
         assert_eq!(

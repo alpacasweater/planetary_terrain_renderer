@@ -126,7 +126,12 @@ fn print_usage_and_exit(code: i32) -> ! {
          - {CAMERA_TARGET_LAT_ENV}=46.55\n\
          - {CAMERA_TARGET_LON_ENV}=10.60\n\
          - {CAMERA_ALTITUDE_ENV}=120000\n\
-         - {CAMERA_BACKOFF_ENV}=80000\n"
+         - {CAMERA_BACKOFF_ENV}=80000\n\
+         \n\
+         Height streaming examples:\n\
+         - POSIX shells: OPENTOPOGRAPHY_API_KEY=your-key cargo run --example minimal_globe -- --max-lod 7 --stream-height\n\
+         - PowerShell: $env:OPENTOPOGRAPHY_API_KEY=\"your-key\"; cargo run --example minimal_globe -- --max-lod 7 --stream-height\n\
+         - cmd.exe: set OPENTOPOGRAPHY_API_KEY=your-key && cargo run --example minimal_globe -- --max-lod 7 --stream-height\n"
     );
     if code == 0 {
         println!("{usage}");

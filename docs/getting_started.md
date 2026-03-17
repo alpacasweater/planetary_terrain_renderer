@@ -13,7 +13,22 @@ The repo already includes a starter Earth dataset.
 ```bash
 cargo run --example minimal_globe
 cargo run --example minimal_globe -- --max-lod 7
+cargo run --example minimal_globe -- --stream-online
+```
+
+If you want OpenTopography height streaming:
+
+```bash
 OPENTOPOGRAPHY_API_KEY=your-key cargo run --example minimal_globe -- --max-lod 7 --stream-height
+```
+
+```powershell
+$env:OPENTOPOGRAPHY_API_KEY = "your-key"
+cargo run --example minimal_globe -- --max-lod 7 --stream-height
+```
+
+```bat
+set OPENTOPOGRAPHY_API_KEY=your-key && cargo run --example minimal_globe -- --max-lod 7 --stream-height
 ```
 
 This launches the smallest demo intended for copying into your own app.
@@ -39,13 +54,22 @@ This keeps the runtime model simple:
 - `minimal_globe` targets `lod 7` by default; use `--max-lod N` or `MINIMAL_GLOBE_MAX_LOD=N` if you want a different cap
 
 Current online limits:
-- the current provider is NASA GIBS true-color imagery
+- `minimal_globe` defaults to `eox_s2cloudless_2017` imagery and retries `nasa_gibs/modis_true_color` as a fallback
 - requests that cross the antimeridian are not implemented yet
 
 If you also want online height refinement, opt in separately and provide an OpenTopography API key:
 
 ```bash
 OPENTOPOGRAPHY_API_KEY=your-key cargo run --example minimal_globe -- --max-lod 7 --stream-height
+```
+
+```powershell
+$env:OPENTOPOGRAPHY_API_KEY = "your-key"
+cargo run --example minimal_globe -- --max-lod 7 --stream-height
+```
+
+```bat
+set OPENTOPOGRAPHY_API_KEY=your-key && cargo run --example minimal_globe -- --max-lod 7 --stream-height
 ```
 
 Current height limits:
@@ -57,8 +81,16 @@ Current height limits:
 If you want an automated fly-in instead of manual camera movement, use the dedicated warmup demo:
 
 ```bash
-source ./.env.opentopography.local
+source ./.env.opentopography.local && cargo run --example streaming_warmup_globe
+```
+
+```powershell
+$env:OPENTOPOGRAPHY_API_KEY = "your-key"
 cargo run --example streaming_warmup_globe
+```
+
+```bat
+set OPENTOPOGRAPHY_API_KEY=your-key && cargo run --example streaming_warmup_globe
 ```
 
 Useful warmup overrides:
@@ -67,6 +99,7 @@ Useful warmup overrides:
 - `TERRAIN_STREAMING_MAX_LOD=11` if you want a deeper refinement ceiling than the default
 - `TERRAIN_STREAM_HEIGHT=1` if you also want OpenTopography height during the warmup run
 - `TERRAIN_STREAM_IMAGERY_PRESET=gibs_modis` if you want the original NASA GIBS imagery instead of the sharper default warmup preset
+- `.env.opentopography.local` is a POSIX-shell `export` file, so on Windows PowerShell or `cmd.exe` set `OPENTOPOGRAPHY_API_KEY` directly instead of using `source`
 
 ## 2. Preprocess a Dataset Without Downloading Anything
 
@@ -191,7 +224,7 @@ Those larger source files are intentionally not committed.
 - If you only want a visible globe, do not start with the preprocess pipeline.
 - `cargo run --example minimal_globe` uses the bundled Earth by default. Pass a different terrain root as the first argument when you want to inspect another dataset.
 - `TERRAIN_STREAMING_CACHE_ROOT` must be asset-relative. Use `streaming_cache`, not an absolute filesystem path.
-- `TERRAIN_STREAM_ONLINE=1` is opt-in. Without it, the renderer never makes network requests.
-- `TERRAIN_STREAMING_MAX_LOD` controls how far online refinement can go beyond the bundled starter dataset. The examples default to `10` when streaming is enabled.
+- `--stream-online` or `TERRAIN_STREAM_ONLINE=1` is opt-in. Without either, the renderer never makes network requests.
+- `--max-lod N`, `MINIMAL_GLOBE_MAX_LOD=N`, and `TERRAIN_STREAMING_MAX_LOD=N` control how far online refinement can go beyond the bundled starter dataset. `minimal_globe` defaults to `7`.
 - `TERRAIN_STREAM_HEIGHT=1` requires `OPENTOPOGRAPHY_API_KEY` and currently targets `AW3D30_E`.
 - The preprocess CLI currently forces `GDAL_NUM_THREADS=1`. That is intentional until the custom transformer is safely cloneable across GDAL worker threads.

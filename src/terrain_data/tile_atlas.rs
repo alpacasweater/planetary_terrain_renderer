@@ -4,7 +4,8 @@ use crate::{
     plugin::TerrainSettings,
     render::TerrainUniform,
     streaming::{
-        CacheFirstLocalTileSource, LocalTileRequest, LocalTileSourceKind, StreamingTileRequest,
+        CacheFirstLocalTileSource, LocalTileRequest, LocalTileSourceKind,
+        StreamingRequestPriority, StreamingTileRequest,
     },
     terrain::{CURRENT_GEODETIC_MAPPING_VERSION, TerrainConfig, TileAvailability},
     terrain_data::{
@@ -519,6 +520,7 @@ impl TileAtlas {
                         coordinate: tile.coordinate,
                         terrain_shape: self.shape,
                         terrain_lod_count: self.lod_count,
+                        priority: StreamingRequestPriority::Background,
                     })
             })
             .collect()

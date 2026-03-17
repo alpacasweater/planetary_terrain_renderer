@@ -24,7 +24,7 @@ What this gives you:
 - the smallest copyable example in [examples/minimal_globe.rs](examples/minimal_globe.rs)
 - no GDAL setup unless you want to preprocess your own data
 - optional cache-first terrain reads when `TERRAIN_STREAMING_CACHE_ROOT` points at an asset-relative cache root such as `streaming_cache`
-- optional online imagery cache fill when `TERRAIN_STREAM_ONLINE=1`
+- optional online imagery cache fill when you pass `--stream-online` or set `TERRAIN_STREAM_ONLINE=1`
 
 Other built-in demos:
 
@@ -73,9 +73,27 @@ It accepts an optional terrain root argument, so the same example works for both
 cargo run --example minimal_globe
 cargo run --example minimal_globe -- terrains/tutorial_earth
 cargo run --example minimal_globe -- --max-lod 7
-OPENTOPOGRAPHY_API_KEY=your-key cargo run --example minimal_globe -- --max-lod 7 --stream-height
-TERRAIN_STREAMING_CACHE_ROOT=streaming_cache cargo run --example minimal_globe
+cargo run --example minimal_globe -- --stream-online
 ```
+
+Height streaming with OpenTopography:
+
+```bash
+OPENTOPOGRAPHY_API_KEY=your-key cargo run --example minimal_globe -- --max-lod 7 --stream-height
+```
+
+```powershell
+$env:OPENTOPOGRAPHY_API_KEY = "your-key"
+cargo run --example minimal_globe -- --max-lod 7 --stream-height
+```
+
+```bat
+set OPENTOPOGRAPHY_API_KEY=your-key && cargo run --example minimal_globe -- --max-lod 7 --stream-height
+```
+
+If you want the example to prefer a warmed cache, set `TERRAIN_STREAMING_CACHE_ROOT=streaming_cache` before launching.
+On PowerShell use `$env:TERRAIN_STREAMING_CACHE_ROOT = "streaming_cache"`.
+On `cmd.exe` use `set TERRAIN_STREAMING_CACHE_ROOT=streaming_cache`.
 
 Default example behavior:
 - `minimal_globe` now defaults to a target max LOD of `7`
@@ -88,17 +106,17 @@ Default example behavior:
 The renderer is local-first by default. If you opt in to online imagery, missing `albedo` tiles are fetched, written into a local cache, and reused on later offline runs.
 
 ```bash
-TERRAIN_STREAM_ONLINE=1 cargo run --example minimal_globe
+cargo run --example minimal_globe -- --stream-online
 ```
 
 Default example behavior:
-- when `TERRAIN_STREAM_ONLINE=1` is set and `TERRAIN_STREAMING_CACHE_ROOT` is unset, the examples use `streaming_cache`
+- when `--stream-online` or `TERRAIN_STREAM_ONLINE=1` is set and `TERRAIN_STREAMING_CACHE_ROOT` is unset, the examples use `streaming_cache`
 - when `minimal_globe` does not receive `--max-lod` or `MINIMAL_GLOBE_MAX_LOD`, it targets `lod 7`
 - streamed tiles are written under `assets/streaming_cache/`
 - cache reads prefer `assets/streaming_cache/` and then fall back to the bundled starter Earth
 
 Current implementation limits:
-- the first provider is NASA GIBS `MODIS_Terra_CorrectedReflectance_TrueColor`
+- `minimal_globe` defaults to `eox_s2cloudless_2017` imagery and retries `nasa_gibs/modis_true_color` as a fallback
 - cache root must be asset-relative
 - antimeridian-crossing requests are not implemented yet, so the bundled starter data still matters near that boundary
 
@@ -106,15 +124,31 @@ Optional online height refinement is also available, but it is not the default q
 It requires an OpenTopography API key and currently uses `AW3D30_E`:
 
 ```bash
-OPENTOPOGRAPHY_API_KEY=your-key \
+OPENTOPOGRAPHY_API_KEY=your-key cargo run --example minimal_globe -- --max-lod 7 --stream-height
+```
+
+```powershell
+$env:OPENTOPOGRAPHY_API_KEY = "your-key"
 cargo run --example minimal_globe -- --max-lod 7 --stream-height
+```
+
+```bat
+set OPENTOPOGRAPHY_API_KEY=your-key && cargo run --example minimal_globe -- --max-lod 7 --stream-height
 ```
 
 If you want a demo that intentionally flies into a land target and warms the cache without manual camera input, use:
 
 ```bash
-source ./.env.opentopography.local
+source ./.env.opentopography.local && cargo run --example streaming_warmup_globe
+```
+
+```powershell
+$env:OPENTOPOGRAPHY_API_KEY = "your-key"
 cargo run --example streaming_warmup_globe
+```
+
+```bat
+set OPENTOPOGRAPHY_API_KEY=your-key && cargo run --example streaming_warmup_globe
 ```
 
 Warmup demo notes:
@@ -124,6 +158,7 @@ Warmup demo notes:
 - set `TERRAIN_STREAM_HEIGHT=1` to include OpenTopography height
 - `STREAM_WARMUP_EXIT_AFTER_SECONDS=45` makes it useful for repeatable cache-warm runs
 - `STREAM_WARMUP_TARGET_LAT` and `STREAM_WARMUP_TARGET_LON` let you retarget the fly-in
+- `.env.opentopography.local` is a POSIX-shell `export` file, so on Windows PowerShell or `cmd.exe` set `OPENTOPOGRAPHY_API_KEY` directly instead of using `source`
 
 Height-streaming notes:
 - `TERRAIN_STREAM_HEIGHT=1` also enables online imagery
@@ -132,20 +167,14 @@ Height-streaming notes:
 - `AW3D30_E` is an ellipsoidal ALOS World 3D source exposed by OpenTopography
 - OpenTopography API details: [Global Datasets](https://opentopography.org/developers)
 
-If you want a non-default cache location, keep it asset-relative:
-
-```bash
-TERRAIN_STREAM_ONLINE=1 \
-TERRAIN_STREAMING_CACHE_ROOT=my_cache \
-cargo run --example minimal_globe
-```
+If you want a non-default cache location, keep it asset-relative and set `TERRAIN_STREAMING_CACHE_ROOT=my_cache` before launching.
+On PowerShell use `$env:TERRAIN_STREAMING_CACHE_ROOT = "my_cache"`.
+On `cmd.exe` use `set TERRAIN_STREAMING_CACHE_ROOT=my_cache`.
 
 If you want to tune how far online refinement can go:
 
 ```bash
-TERRAIN_STREAM_ONLINE=1 \
-TERRAIN_STREAMING_MAX_LOD=7 \
-cargo run --example minimal_globe
+cargo run --example minimal_globe -- --stream-online --max-lod 7
 ```
 
 ## Cross-Platform Preprocessing Setup
