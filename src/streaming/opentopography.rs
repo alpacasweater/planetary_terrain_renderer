@@ -22,6 +22,9 @@ use tiff::{
 const DEFAULT_OPENTOPOGRAPHY_ENDPOINT: &str = "https://portal.opentopography.org/API/globaldem";
 const DEFAULT_OPENTOPOGRAPHY_DEM_TYPE: &str = "AW3D30_E";
 const DEFAULT_OPENTOPOGRAPHY_OUTPUT_FORMAT: &str = "GTiff";
+const EARTH_RADIUS_KM: f64 = 6_371.0;
+const MAX_REQUEST_AREA_30M_SQ_KM: f64 = 450_000.0;
+const MAX_REQUEST_AREA_90M_SQ_KM: f64 = 4_050_000.0;
 const PLAUSIBLE_EARTH_MIN_HEIGHT_M: f32 = -20_000.0;
 const PLAUSIBLE_EARTH_MAX_HEIGHT_M: f32 = 20_000.0;
 
@@ -119,6 +122,7 @@ impl OpenTopographyHeightProvider {
         })?;
 
         let bbox_lon_lat = request_lon_lat_bbox(request)?;
+        validate_bbox_area_for_dem_type(&self.config.dem_type, bbox_lon_lat)?;
         Ok(OpenTopographyGlobalDemRequest {
             endpoint: self.config.endpoint.clone(),
             dem_type: self.config.dem_type.clone(),
@@ -227,6 +231,43 @@ fn validate_request(request: &StreamingTileRequest) -> Result<(), StreamingProvi
     }
 
     Ok(())
+}
+
+fn validate_bbox_area_for_dem_type(
+    dem_type: &str,
+    bbox_lon_lat: [f64; 4],
+) -> Result<(), StreamingProviderError> {
+    let Some(max_area_sq_km) = max_request_area_sq_km_for_dem_type(dem_type) else {
+        return Ok(());
+    };
+
+    let area_sq_km = bbox_area_sq_km(bbox_lon_lat);
+    if area_sq_km > max_area_sq_km {
+        return Err(StreamingProviderError::Unsupported(format!(
+            "OpenTopography {dem_type} requests are limited to {:.0} km^2, but this tile covers about {:.0} km^2. Coarse tiles must fall back to local height until the view requests smaller regions.",
+            max_area_sq_km,
+            area_sq_km,
+        )));
+    }
+
+    Ok(())
+}
+
+fn max_request_area_sq_km_for_dem_type(dem_type: &str) -> Option<f64> {
+    match dem_type.trim().to_ascii_uppercase().as_str() {
+        "AW3D30" | "AW3D30_E" | "SRTMGL1" | "SRTMGL1_E" | "NASADEM" | "COP30" | "EU_DTM" => {
+            Some(MAX_REQUEST_AREA_30M_SQ_KM)
+        }
+        "SRTMGL3" | "COP90" => Some(MAX_REQUEST_AREA_90M_SQ_KM),
+        _ => None,
+    }
+}
+
+fn bbox_area_sq_km(bbox_lon_lat: [f64; 4]) -> f64 {
+    let lon_span_rad = (bbox_lon_lat[2] - bbox_lon_lat[0]).abs().to_radians();
+    let south_sin = bbox_lon_lat[1].to_radians().sin();
+    let north_sin = bbox_lon_lat[3].to_radians().sin();
+    EARTH_RADIUS_KM.powi(2) * lon_span_rad * (north_sin - south_sin).abs()
 }
 
 struct DecodedDem {
@@ -381,7 +422,7 @@ fn map_ureq_error(error: ureq::Error) -> StreamingProviderError {
         ureq::Error::Status(code, response) => {
             let status = format!(
                 "OpenTopography returned HTTP {code} for {}",
-                response.get_url()
+                redact_api_key_in_url(response.get_url())
             );
             if code == 429 || code >= 500 {
                 StreamingProviderError::Transient(status)
@@ -394,6 +435,25 @@ fn map_ureq_error(error: ureq::Error) -> StreamingProviderError {
             error.message().unwrap_or("transport error without message")
         )),
     }
+}
+
+fn redact_api_key_in_url(url: &str) -> String {
+    redact_query_parameter(url, "API_Key")
+}
+
+fn redact_query_parameter(url: &str, parameter: &str) -> String {
+    let needle = format!("{parameter}=");
+    let Some(start) = url.find(&needle) else {
+        return url.to_string();
+    };
+    let value_start = start + needle.len();
+    let value_end = url[value_start..]
+        .find('&')
+        .map(|offset| value_start + offset)
+        .unwrap_or(url.len());
+    let mut redacted = url.to_string();
+    redacted.replace_range(value_start..value_end, "REDACTED");
+    redacted
 }
 
 fn current_unix_ms() -> u64 {
@@ -445,7 +505,7 @@ mod tests {
             ..Default::default()
         });
         let planned = provider
-            .plan_global_dem(&height_request(TileCoordinate::new(0, 2, IVec2::new(1, 1))))
+            .plan_global_dem(&height_request(TileCoordinate::new(0, 6, IVec2::new(20, 18))))
             .expect("mid-latitude tile should be plannable");
 
         let url = planned.url();
@@ -463,7 +523,7 @@ mod tests {
         });
 
         assert!(matches!(
-            provider.availability(&height_request(TileCoordinate::new(0, 2, IVec2::new(1, 1)))),
+            provider.availability(&height_request(TileCoordinate::new(0, 6, IVec2::new(20, 18)))),
             StreamingSourceAvailability::Unavailable { .. }
         ));
     }
@@ -481,6 +541,33 @@ mod tests {
             provider.availability(&request),
             StreamingSourceAvailability::Unavailable { .. }
         ));
+    }
+
+    #[test]
+    fn provider_rejects_requests_that_exceed_aw3d30_area_limit() {
+        let provider = OpenTopographyHeightProvider::new(OpenTopographyHeightConfig {
+            api_key: Some("test-key".to_string()),
+            ..Default::default()
+        });
+        let request = height_request(TileCoordinate::new(0, 3, IVec2::new(5, 0)));
+
+        let error = provider
+            .plan_global_dem(&request)
+            .expect_err("coarse AW3D30 tiles should exceed the documented area limit");
+
+        let message = error.to_string();
+        assert!(message.contains("450000 km^2"));
+        assert!(message.contains("covers about"));
+    }
+
+    #[test]
+    fn api_key_is_redacted_from_error_urls() {
+        let redacted = redact_api_key_in_url(
+            "https://portal.opentopography.org/API/globaldem?demtype=AW3D30_E&API_Key=secret-value&outputFormat=GTiff",
+        );
+
+        assert!(redacted.contains("API_Key=REDACTED"));
+        assert!(!redacted.contains("secret-value"));
     }
 
     fn unique_temp_dir() -> PathBuf {

@@ -4,7 +4,7 @@ use crate::{
         CacheFirstLocalTileSource, CacheTileEncoding, CachedTileMetadata, LocalTileRequest,
         LocalTileSourceKind, NasaGibsImageryProvider, OpenTopographyHeightProvider,
         StreamedAttachmentKind, StreamingProviderError, StreamingSourceDescriptor,
-        StreamingSourceKind, StreamingTileProvider,
+        StreamingSourceAvailability, StreamingSourceKind, StreamingTileProvider,
         cache_writer::{StreamingCacheWriteError, write_materialized_tile},
         source_contract::StreamingTileRequest,
     },
@@ -359,15 +359,13 @@ pub fn start_streaming_jobs(
                     }
                 }
                 AttachmentLabel::Height => match cache_root.map(PathBuf::from) {
-                    Some(cache_root) if stream_height => materialize_request_into_cache(
+                    Some(cache_root) => materialize_height_request_into_cache(
                         &opentopography,
                         &request,
                         &asset_root,
                         &cache_root,
+                        stream_height,
                     ),
-                    Some(cache_root) => {
-                        materialize_derived_height_into_cache(&request, &asset_root, &cache_root)
-                    }
                     None => Err(StreamingTaskError::MissingCacheRoot),
                 },
                 _ => Err(StreamingTaskError::UnsupportedAttachment(
@@ -474,6 +472,39 @@ fn materialize_imagery_request_into_cache<P: StreamingTileProvider>(
     }
 
     materialize_request_into_cache(provider, request, asset_root, cache_root)
+}
+
+fn materialize_height_request_into_cache<P: StreamingTileProvider>(
+    provider: &P,
+    request: &StreamingTileRequest,
+    asset_root: &Path,
+    cache_root: &Path,
+    stream_height: bool,
+) -> Result<PathBuf, StreamingTaskError> {
+    if !stream_height {
+        return materialize_derived_height_into_cache(request, asset_root, cache_root);
+    }
+
+    match provider.availability(request) {
+        StreamingSourceAvailability::Available => {
+            materialize_request_into_cache(provider, request, asset_root, cache_root)
+        }
+        StreamingSourceAvailability::Unavailable { reason } => {
+            debug!(
+                "Remote height stream unavailable for {:?}: {}. Falling back to local height derivation.",
+                request.coordinate,
+                reason
+            );
+            materialize_derived_height_into_cache(request, asset_root, cache_root)
+        }
+        StreamingSourceAvailability::Unknown => {
+            debug!(
+                "Remote height stream availability is unknown for {:?}. Falling back to local height derivation.",
+                request.coordinate
+            );
+            materialize_derived_height_into_cache(request, asset_root, cache_root)
+        }
+    }
 }
 
 fn materialize_missing_imagery_ancestor_chain_into_cache<P: StreamingTileProvider>(
@@ -1051,6 +1082,7 @@ mod tests {
     }
 
     struct StubImageryProvider;
+    struct StubUnavailableHeightProvider;
 
     fn encode_rgb_fixture_tiff(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {
         let texel_count = (width * height) as usize;
@@ -1063,6 +1095,18 @@ mod tests {
         let mut encoder = TiffEncoder::new(&mut cursor).unwrap();
         encoder
             .write_image::<colortype::RGB8>(width, height, &bytes)
+            .unwrap();
+        cursor.into_inner()
+    }
+
+    fn encode_height_fixture_tiff(width: u32, height: u32, sample: f32) -> Vec<u8> {
+        let texel_count = (width * height) as usize;
+        let bytes = vec![sample; texel_count];
+
+        let mut cursor = Cursor::new(Vec::new());
+        let mut encoder = TiffEncoder::new(&mut cursor).unwrap();
+        encoder
+            .write_image::<colortype::Gray32Float>(width, height, &bytes)
             .unwrap();
         cursor.into_inner()
     }
@@ -1105,6 +1149,29 @@ mod tests {
                     encoding: CacheTileEncoding::Tiff,
                 },
             })
+        }
+    }
+
+    impl StreamingTileProvider for StubUnavailableHeightProvider {
+        fn descriptor(&self) -> StreamingSourceDescriptor {
+            StreamingSourceDescriptor {
+                source_id: "stub/unavailable_height".to_string(),
+                source_kind: StreamingSourceKind::Custom("stub".to_string()),
+                attachment_kind: StreamedAttachmentKind::Height,
+            }
+        }
+
+        fn availability(&self, _request: &StreamingTileRequest) -> StreamingSourceAvailability {
+            StreamingSourceAvailability::Unavailable {
+                reason: "request exceeds remote dataset limit".to_string(),
+            }
+        }
+
+        fn materialize_tile(
+            &self,
+            _request: &StreamingTileRequest,
+        ) -> Result<MaterializedStreamingTile, StreamingProviderError> {
+            panic!("remote materialization should not run when availability is unavailable");
         }
     }
 
@@ -1159,6 +1226,87 @@ mod tests {
         let mut queue = StreamingRequestQueue::default();
         assert!(!queue.enqueue(request, &TerrainStreamingSettings::default()));
         assert_eq!(queue.stats().dropped_offline_total, 1);
+
+        fs::remove_dir_all(asset_root).unwrap();
+    }
+
+    #[test]
+    fn height_requests_fall_back_to_local_derivation_when_remote_is_unavailable() {
+        let asset_root = unique_temp_dir();
+        let cache_root = PathBuf::from("streaming_cache");
+        let parent_coordinate = crate::math::TileCoordinate::new(0, 1, IVec2::new(0, 0));
+        let child_coordinate = crate::math::TileCoordinate::new(0, 3, IVec2::new(2, 1));
+
+        let parent_request = StreamingTileRequest {
+            terrain_path: "terrains/earth".to_string(),
+            attachment_label: AttachmentLabel::Height,
+            attachment_config: AttachmentConfig {
+                texture_size: 4,
+                border_size: 0,
+                mip_level_count: 1,
+                mask: false,
+                format: AttachmentFormat::R32F,
+            },
+            coordinate: parent_coordinate,
+            terrain_shape: TerrainShape::WGS84,
+            terrain_lod_count: 3,
+            priority: StreamingRequestPriority::Background,
+        };
+
+        fs::create_dir_all(&asset_root).unwrap();
+        crate::streaming::cache_writer::write_materialized_tile(
+            &asset_root,
+            &cache_root,
+            &MaterializedStreamingTile {
+                bytes: encode_height_fixture_tiff(4, 4, 1234.0),
+                metadata: crate::streaming::CachedTileMetadata {
+                    format_version: crate::streaming::CURRENT_STREAMING_CACHE_FORMAT_VERSION,
+                    terrain_path: parent_request.terrain_path.clone(),
+                    attachment_label: parent_request.attachment_label.clone(),
+                    coordinate: parent_coordinate,
+                    source: StreamingSourceDescriptor {
+                        source_id: "stub/local_height".to_string(),
+                        source_kind: StreamingSourceKind::LocalCache,
+                        attachment_kind: StreamedAttachmentKind::Height,
+                    },
+                    fetched_at_unix_ms: 1,
+                    expires_at_unix_ms: None,
+                    source_zoom: Some(parent_coordinate.lod),
+                    source_revision: None,
+                    source_content_hash: None,
+                    source_crs: Some("EPSG:4326".to_string()),
+                    encoding: CacheTileEncoding::Tiff,
+                },
+            },
+        )
+        .expect("parent height tile should be writable");
+
+        let child_request = StreamingTileRequest {
+            coordinate: child_coordinate,
+            ..parent_request
+        };
+
+        let written = materialize_height_request_into_cache(
+            &StubUnavailableHeightProvider,
+            &child_request,
+            &asset_root,
+            &cache_root,
+            true,
+        )
+        .expect("local derivation should satisfy the missing height tile");
+
+        let resolved = CacheFirstLocalTileSource::new(asset_root.clone(), Some(cache_root))
+            .resolve_present_tile(&LocalTileRequest {
+                terrain_path: child_request.terrain_path.clone(),
+                attachment_label: AttachmentLabel::Height,
+                coordinate: child_coordinate,
+            })
+            .expect("derived child height should be present in the cache");
+        assert_eq!(resolved.asset_path, written);
+
+        let (_, _, samples) =
+            decode_height_tiff(&fs::read(asset_root.join(written)).unwrap()).unwrap();
+        assert!(samples.iter().all(|sample| (*sample - 1234.0).abs() < 1e-4));
 
         fs::remove_dir_all(asset_root).unwrap();
     }
