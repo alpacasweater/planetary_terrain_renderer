@@ -408,7 +408,7 @@ mod tests {
     use super::*;
     use crate::{
         math::{Coordinate, TerrainShape, TileCoordinate, ViewCoordinate},
-        streaming::cache_writer::write_materialized_tile,
+        streaming::{StreamingRequestPriority, cache_writer::write_materialized_tile},
         terrain_data::{AttachmentConfig, AttachmentLabel},
     };
     use bevy::math::IVec2;
@@ -434,6 +434,7 @@ mod tests {
             coordinate: tile,
             terrain_shape: TerrainShape::WGS84,
             terrain_lod_count: 5,
+            priority: StreamingRequestPriority::Background,
         }
     }
 

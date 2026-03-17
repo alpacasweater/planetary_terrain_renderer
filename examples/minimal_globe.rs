@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
-use bevy_terrain::prelude::*;
+use bevy_terrain::{math::geodesy::unit_from_lat_lon_degrees, prelude::*};
 use std::{env, path::PathBuf};
 
 const RADIUS: f64 = 6_371_000.0;
@@ -9,7 +9,13 @@ const STREAMING_CACHE_ROOT_ENV: &str = "TERRAIN_STREAMING_CACHE_ROOT";
 const STREAM_ONLINE_ENV: &str = "TERRAIN_STREAM_ONLINE";
 const STREAM_HEIGHT_ENV: &str = "TERRAIN_STREAM_HEIGHT";
 const STREAMING_MAX_LOD_ENV: &str = "TERRAIN_STREAMING_MAX_LOD";
-const DEFAULT_STREAMING_MAX_LOD: u32 = 6;
+const DEFAULT_STREAMING_MAX_LOD: u32 = 10;
+const CAMERA_TARGET_LAT_ENV: &str = "MINIMAL_GLOBE_TARGET_LAT";
+const CAMERA_TARGET_LON_ENV: &str = "MINIMAL_GLOBE_TARGET_LON";
+const CAMERA_ALTITUDE_ENV: &str = "MINIMAL_GLOBE_CAMERA_ALTITUDE_M";
+const CAMERA_BACKOFF_ENV: &str = "MINIMAL_GLOBE_CAMERA_BACKOFF_M";
+const DEFAULT_CAMERA_ALTITUDE_M: f32 = 120_000.0;
+const DEFAULT_CAMERA_BACKOFF_M: f32 = 80_000.0;
 
 fn main() {
     let mut app = App::new();
@@ -28,6 +34,7 @@ fn main() {
         TerrainPlugin,
         SimpleTerrainMaterialPlugin,
         TerrainDebugPlugin,
+        TerrainPickingPlugin,
     ))
     .insert_resource(terrain_settings_from_env())
     .add_systems(Startup, setup);
@@ -83,6 +90,60 @@ fn env_var_enabled(name: &str) -> bool {
     )
 }
 
+fn env_f32(name: &str, default: f32) -> f32 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<f32>().ok())
+        .unwrap_or(default)
+}
+
+fn env_f64(name: &str) -> Option<f64> {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<f64>().ok())
+}
+
+fn camera_transform_for_overview() -> Transform {
+    Transform::from_translation(-Vec3::X * RADIUS as f32 * 3.0).looking_to(Vec3::X, Vec3::Y)
+}
+
+fn camera_transform_for_focus(
+    lat_deg: f64,
+    lon_deg: f64,
+    altitude_m: f32,
+    backoff_m: f32,
+) -> Transform {
+    let up = unit_from_lat_lon_degrees(lat_deg, lon_deg)
+        .as_vec3()
+        .normalize();
+    let target = up * RADIUS as f32;
+
+    let mut east = Vec3::Y.cross(up);
+    if east.length_squared() < 1e-6 {
+        east = Vec3::Z.cross(up);
+    }
+    east = east.normalize();
+    let north = up.cross(east).normalize();
+
+    let camera_position = target + up * altitude_m + north * backoff_m;
+    Transform::from_translation(camera_position).looking_at(target, north)
+}
+
+fn initial_camera_transform_from_env() -> Transform {
+    match (
+        env_f64(CAMERA_TARGET_LAT_ENV),
+        env_f64(CAMERA_TARGET_LON_ENV),
+    ) {
+        (Some(lat_deg), Some(lon_deg)) => camera_transform_for_focus(
+            lat_deg,
+            lon_deg,
+            env_f32(CAMERA_ALTITUDE_ENV, DEFAULT_CAMERA_ALTITUDE_M),
+            env_f32(CAMERA_BACKOFF_ENV, DEFAULT_CAMERA_BACKOFF_M),
+        ),
+        _ => camera_transform_for_overview(),
+    }
+}
+
 fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -103,13 +164,26 @@ fn setup(
         return;
     }
 
+    info!(
+        "Controls: scroll or right-drag to zoom, left-drag to pan, middle-drag to orbit, T toggles fly camera."
+    );
+
+    if let Ok(config) = TerrainConfig::load_file(&terrain_config_fs) {
+        if terrain_root == DEFAULT_TERRAIN_ROOT && config.lod_count < 5 {
+            warn!(
+                "Bundled Earth is a coarse starter dataset (lod_count={}). Steep relief like the Alps will look soft unless you use a higher-resolution terrain root, cached higher-LOD tiles, or TERRAIN_STREAM_HEIGHT=1 with OpenTopography.",
+                config.lod_count
+            );
+        }
+    }
+
     let mut view = Entity::PLACEHOLDER;
+    let initial_transform = initial_camera_transform_from_env();
 
     commands.spawn_big_space(Grid::default(), |root| {
         view = root
             .spawn_spatial((
-                Transform::from_translation(-Vec3::X * RADIUS as f32 * 3.0)
-                    .looking_to(Vec3::X, Vec3::Y),
+                initial_transform,
                 DebugCameraController::new(RADIUS),
                 OrbitalCameraController::default(),
             ))

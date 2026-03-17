@@ -113,7 +113,8 @@ pub(crate) fn normalize_lon_to_180(lon_deg: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::{
-        math::{TerrainShape, TileCoordinate},
+        math::{Coordinate, TerrainShape, TileCoordinate},
+        streaming::StreamingRequestPriority,
         terrain_data::{AttachmentConfig, AttachmentFormat, AttachmentLabel},
     };
     use bevy::math::IVec2;
@@ -132,7 +133,13 @@ mod tests {
             coordinate: tile,
             terrain_shape: TerrainShape::WGS84,
             terrain_lod_count: 3,
+            priority: StreamingRequestPriority::Background,
         }
+    }
+
+    fn tile_for_coordinate(coordinate: Coordinate, lod: u32) -> TileCoordinate {
+        let tile_xy = (coordinate.uv * (lod as f64).exp2()).as_ivec2();
+        TileCoordinate::new(coordinate.face, lod, tile_xy)
     }
 
     #[test]
@@ -149,5 +156,45 @@ mod tests {
         assert!((normalize_lon_around(-179.0, 179.0) - 181.0).abs() < 1e-9);
         assert!((normalize_lon_around(179.0, -179.0) + 181.0).abs() < 1e-9);
         assert!((normalize_lon_to_180(181.0) + 179.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn streamed_tile_roundtrip_keeps_the_alps_target_in_the_same_tile() {
+        let target_lat_deg = 46.55;
+        let target_lon_deg = 10.60;
+        let target_coordinate = Coordinate::from_lat_lon_degrees(target_lat_deg, target_lon_deg);
+        let target_tile = tile_for_coordinate(target_coordinate, 11);
+        let request = height_request(target_tile);
+
+        let tile_count = (target_tile.lod as f64).exp2();
+        let within_tile = target_coordinate.uv * tile_count - target_tile.xy.as_dvec2();
+        let pixel_x = within_tile.x * request.attachment_config.center_size() as f64
+            + request.attachment_config.border_size as f64
+            - 0.5;
+        let pixel_y = within_tile.y * request.attachment_config.center_size() as f64
+            + request.attachment_config.border_size as f64
+            - 0.5;
+
+        let sampled_coordinate = texture_sample_coordinate(&request, pixel_x, pixel_y);
+        let sampled_tile = tile_for_coordinate(sampled_coordinate, target_tile.lod);
+        let (roundtrip_lat_deg, roundtrip_lon_deg) = sampled_coordinate.lat_lon_degrees();
+
+        assert_eq!(sampled_tile, target_tile);
+        assert!((roundtrip_lat_deg - target_lat_deg).abs() < 1e-6);
+        assert!((normalize_lon_to_180(roundtrip_lon_deg - target_lon_deg)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn alps_target_maps_to_the_north_face_edge_not_the_far_side() {
+        let target_coordinate = Coordinate::from_lat_lon_degrees(46.55, 10.60);
+        let target_tile = tile_for_coordinate(target_coordinate, 11);
+
+        assert_eq!(target_tile.face, 2);
+        assert!(
+            target_tile.xy.x < 128,
+            "unexpected Alps x column: {}",
+            target_tile.xy.x
+        );
+        assert!((1240..=1280).contains(&target_tile.xy.y));
     }
 }
