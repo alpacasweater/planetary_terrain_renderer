@@ -49,6 +49,11 @@ struct TileState {
     request_sequence: u64,
 }
 
+struct PendingStreamTileState {
+    requests: u32,
+    request_sequence: u64,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TileAtlasPerfCounters {
     pub tile_requests_total: u64,
@@ -90,6 +95,7 @@ pub struct TileAtlasPerfCounters {
 pub struct TileAtlas {
     pub(crate) attachments: HashMap<AttachmentLabel, Attachment>, // stores the attachment data
     tile_states: HashMap<TileCoordinate, TileState>,
+    pending_stream_tiles: HashMap<TileCoordinate, PendingStreamTileState>,
     unused_indices: VecDeque<u32>,
     explicit_tiles: HashSet<TileCoordinate>,
     tile_availability: TileAvailability,
@@ -120,7 +126,7 @@ impl TileAtlas {
     }
 
     pub fn active_tile_count(&self) -> usize {
-        self.tile_states.len()
+        self.tile_states.len() + self.pending_stream_tiles.len()
     }
 
     pub fn existing_tile_count(&self) -> usize {
@@ -140,6 +146,11 @@ impl TileAtlas {
         self.tile_states
             .get(&tile_coordinate)
             .map(|tile| tile.requests > 0)
+            .or_else(|| {
+                self.pending_stream_tiles
+                    .get(&tile_coordinate)
+                    .map(|tile| tile.requests > 0)
+            })
             .unwrap_or(false)
     }
 
@@ -234,6 +245,7 @@ impl TileAtlas {
         Self {
             attachments,
             tile_states: default(),
+            pending_stream_tiles: default(),
             unused_indices: (0..settings.atlas_size).collect(),
             explicit_tiles: HashSet::from_iter(config.tiles.clone()),
             tile_availability: config.tile_availability,
@@ -341,6 +353,8 @@ impl TileAtlas {
             for tile_coordinate in tile_tree.requested_tiles.drain(..) {
                 tile_atlas.request_tile(tile_coordinate);
             }
+
+            tile_atlas.refresh_pending_stream_tiles();
         }
         perf_telemetry.record_duration(PHASE_MAIN_TILE_ATLAS_UPDATE, start.elapsed());
     }
@@ -377,51 +391,38 @@ impl TileAtlas {
             }
 
             tile.requests += 1;
+        } else if let Some(tile) = self.pending_stream_tiles.get_mut(&tile_coordinate) {
+            tile.requests += 1;
+            tile.request_sequence = request_sequence;
         } else {
-            // Keep the current runtime local-first until remote cache fill exists.
             let missing_attachments = self.missing_local_attachments(tile_coordinate);
             if !missing_attachments.is_empty() {
-                self.to_stream
-                    .extend(missing_attachments.into_iter().map(|label| AttachmentTile {
-                        coordinate: tile_coordinate,
-                        label,
-                    }));
+                self.pending_stream_tiles.insert(
+                    tile_coordinate,
+                    PendingStreamTileState {
+                        requests: 1,
+                        request_sequence,
+                    },
+                );
                 return;
             }
 
-            let atlas_index = self
-                .unused_indices
-                .pop_front()
-                .expect("Atlas out of indices");
-
-            self.tile_states
-                .retain(|_, tile| tile.atlas_index != atlas_index); // remove tile if it is still cached
-
-            self.tile_states.insert(
-                tile_coordinate,
-                TileState {
-                    requests: 1,
-                    state: LoadingState::Loading(self.attachments.len() as u32),
-                    atlas_index,
-                    request_sequence,
-                },
-            );
-
-            for label in self.attachments.keys() {
-                self.to_load.push(AttachmentTile {
-                    coordinate: tile_coordinate,
-                    label: label.clone(),
-                });
-            }
-            self.perf_counters.peak_pending_attachment_queue = self
-                .perf_counters
-                .peak_pending_attachment_queue
-                .max(self.to_load.len());
+            self.begin_loading_requested_tile(tile_coordinate, 1, request_sequence);
         }
     }
 
     fn release_tile(&mut self, tile_coordinate: TileCoordinate) {
         if !self.is_tile_available(tile_coordinate) {
+            return;
+        }
+
+        if let Some(tile) = self.pending_stream_tiles.get_mut(&tile_coordinate) {
+            self.perf_counters.tile_releases_total += 1;
+            tile.requests -= 1;
+            if tile.requests == 0 {
+                self.pending_stream_tiles.remove(&tile_coordinate);
+                self.to_stream.retain(|tile| tile.coordinate != tile_coordinate);
+            }
             return;
         }
 
@@ -481,6 +482,66 @@ impl TileAtlas {
             .collect()
     }
 
+    fn refresh_pending_stream_tiles(&mut self) {
+        let pending_tiles = self
+            .pending_stream_tiles
+            .iter()
+            .filter(|(_, tile)| tile.requests > 0)
+            .map(|(&coordinate, tile)| (coordinate, tile.requests, tile.request_sequence))
+            .collect::<Vec<_>>();
+
+        for (coordinate, requests, request_sequence) in pending_tiles {
+            let missing_attachments = self.missing_local_attachments(coordinate);
+            if missing_attachments.is_empty() {
+                self.pending_stream_tiles.remove(&coordinate);
+                self.to_stream.retain(|tile| tile.coordinate != coordinate);
+                self.begin_loading_requested_tile(coordinate, requests, request_sequence);
+            } else {
+                self.to_stream
+                    .extend(missing_attachments.into_iter().map(|label| AttachmentTile {
+                        coordinate,
+                        label,
+                    }));
+            }
+        }
+    }
+
+    fn begin_loading_requested_tile(
+        &mut self,
+        tile_coordinate: TileCoordinate,
+        requests: u32,
+        request_sequence: u64,
+    ) {
+        let atlas_index = self
+            .unused_indices
+            .pop_front()
+            .expect("Atlas out of indices");
+
+        self.tile_states
+            .retain(|_, tile| tile.atlas_index != atlas_index); // remove tile if it is still cached
+
+        self.tile_states.insert(
+            tile_coordinate,
+            TileState {
+                requests,
+                state: LoadingState::Loading(self.attachments.len() as u32),
+                atlas_index,
+                request_sequence,
+            },
+        );
+
+        for label in self.attachments.keys() {
+            self.to_load.push(AttachmentTile {
+                coordinate: tile_coordinate,
+                label: label.clone(),
+            });
+        }
+        self.perf_counters.peak_pending_attachment_queue = self
+            .perf_counters
+            .peak_pending_attachment_queue
+            .max(self.to_load.len());
+    }
+
     fn cancel_loading_tile(&mut self, tile_coordinate: TileCoordinate) -> bool {
         let Some(tile_state) = self.tile_states.remove(&tile_coordinate) else {
             return false;
@@ -532,5 +593,84 @@ fn normalize_terrain_asset_path(path: &str) -> String {
         path[7..].to_string()
     } else {
         path.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        plugin::TerrainSettings,
+        streaming::cache_paths::cache_tile_asset_path,
+        terrain::{TerrainConfig, TileAvailability},
+        terrain_data::{AttachmentConfig, AttachmentFormat},
+    };
+    use bevy::math::IVec2;
+    use std::{fs, time::{SystemTime, UNIX_EPOCH}};
+
+    fn unique_suffix() -> u128 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough for tests")
+            .as_nanos()
+    }
+
+    #[test]
+    fn streamed_tiles_become_loadable_without_a_second_request_edge() {
+        let unique = unique_suffix();
+        let terrain_path = format!("assets/terrains/test_stream_pending_{unique}");
+        let cache_root = format!("streaming_cache_test_{unique}");
+        let coordinate = TileCoordinate::new(0, 0, IVec2::new(0, 0));
+
+        let mut config = TerrainConfig {
+            path: terrain_path.clone(),
+            shape: TerrainShape::WGS84,
+            lod_count: 1,
+            min_height: 0.0,
+            max_height: 1.0,
+            tile_availability: TileAvailability::FullFace,
+            ..Default::default()
+        };
+        config.add_attachment(
+            AttachmentLabel::Height,
+            AttachmentConfig {
+                texture_size: 4,
+                border_size: 0,
+                mip_level_count: 1,
+                mask: false,
+                format: AttachmentFormat::R32F,
+            },
+        );
+
+        let settings = TerrainSettings::default().with_streaming_cache_root(cache_root.clone());
+        let mut buffers = Assets::<ShaderStorageBuffer>::default();
+        let mut tile_atlas = TileAtlas::new(&config, &mut buffers, &settings);
+
+        tile_atlas.request_tile(coordinate);
+        assert!(tile_atlas.pending_stream_tiles.contains_key(&coordinate));
+        assert!(tile_atlas.tile_states.get(&coordinate).is_none());
+
+        tile_atlas.refresh_pending_stream_tiles();
+        assert_eq!(tile_atlas.to_stream.len(), 1);
+        assert!(tile_atlas.to_load.is_empty());
+
+        let tile_path = cache_tile_asset_path(
+            PathBuf::from(&cache_root).as_path(),
+            &tile_atlas.terrain_path,
+            &AttachmentLabel::Height,
+            coordinate,
+        );
+        let tile_fs_path = PathBuf::from("assets").join(tile_path);
+        fs::create_dir_all(tile_fs_path.parent().unwrap()).unwrap();
+        fs::write(&tile_fs_path, b"height").unwrap();
+
+        tile_atlas.refresh_pending_stream_tiles();
+        assert!(!tile_atlas.pending_stream_tiles.contains_key(&coordinate));
+        assert!(tile_atlas.tile_states.contains_key(&coordinate));
+        assert_eq!(tile_atlas.to_load.len(), 1);
+        assert_eq!(tile_atlas.to_load[0].coordinate, coordinate);
+        assert_eq!(tile_atlas.to_load[0].label, AttachmentLabel::Height);
+
+        let _ = fs::remove_dir_all(PathBuf::from("assets").join(cache_root));
     }
 }
