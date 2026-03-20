@@ -46,7 +46,9 @@ python3 scripts/physical_truth_matrix.py \
 
 Current suites:
 - default Earth base suite
-- `swiss_overlay` suite for the local HGT-overlap strip
+- current high-relief overlay suite (currently `swiss_overlay`) for the available local overlap strip
+
+The overlay suite name reflects the current local reference sample. The harness itself is intended to grow to additional mountainous overlays rather than stay tied to one region.
 
 The matrix reports:
 - `renderer_vs_small_world`
@@ -71,14 +73,16 @@ python3 scripts/path_truth_regression.py \
   --json-out /tmp/swiss_overlay_path_truth_source.json
 ```
 
+The example command below uses the current reference high-relief overlay sample; substitute another overlay dataset as broader truth coverage comes online.
+
 This turns terrain residuals into the operational metric that matters for drone and robot overlays: rendered AGL error along a path.
 
-Current Swiss overlay result in the HGT-overlap strip:
+Current reference high-relief overlay result in the available overlap strip:
 - source-raster anchored path: `13.240 m` p95 rendered AGL error
 - `small_world` anchored path: `40.314 m` p95 rendered AGL error
 
 Interpretation:
-- source-anchored placement over the rebuilt Swiss overlay is physically credible
+- source-anchored placement over the current reference high-relief overlay sample is physically credible
 - the remaining `small_world`-anchored error is mostly DEM-vs-HGT floor, not renderer frame error
 
 ## Current Earth Baseline
@@ -93,9 +97,9 @@ At `lat=46.55, lon=10.60` over an `81`-point `2 km x 2 km` grid:
 
 With the current Earth height build (`lod_count = 5`):
 - flat and coastal cases are effectively at dataset floor
-- steep-relief Alpine cases are much better than before, but still retain tens of meters of p95 renderer error above the source-vs-`small_world` floor in some subregions
+- sampled steep-relief mountainous cases are much better than before, but still retain tens of meters of p95 renderer error above the source-vs-`small_world` floor in some subregions
 
-Swiss overlay in the local HGT-overlap strip:
+Current reference high-relief overlay sample (suite id `swiss_overlay`) in the available local overlap strip:
 - renderer vs source p95: `13-20 m`
 - renderer vs `small_world` p95: `29-40 m`
 
@@ -113,5 +117,5 @@ Interpretation:
 
 - the harnesses use the corrected renderer geodetic mapping
 - terrain assets generated before the 2026-03-07 physical-truth mapping fix are stale and should be rebuilt before treating results as authoritative
-- the local Swiss overlay requires `lod_count = 9` class resolution for acceptable source parity
+- the current reference high-relief overlay sample requires `lod_count = 9` class resolution for acceptable source parity
 - the preprocess CLI currently forces `GDAL_NUM_THREADS=1` because the custom transformer is not yet safely cloneable across GDAL worker threads

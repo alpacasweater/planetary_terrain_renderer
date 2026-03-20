@@ -5,7 +5,7 @@
 - direct renderer `LLA/ECEF/NED` geodesy matches `small_world`
 - renderer-native WGS84 local placement matches `small_world`
 - preprocess and runtime mapping semantics have been aligned
-- stale Earth and Swiss terrain assets have been regenerated locally
+- stale Earth and reference-overlay terrain assets have been regenerated locally
 
 Direct truth checks live in:
 - `src/math/geodesy.rs`
@@ -36,11 +36,13 @@ Key result near `lat=46.55, lon=10.60`:
 Interpretation:
 - the direct geodetic frame mismatch is fixed
 - the old coarse Earth height build was a major source of renderer-side error
-- the remaining Alps mismatch is now mostly GEBCO-vs-HGT dataset disagreement rather than renderer mapping drift
+- the remaining high-relief mismatch in this sample is now mostly GEBCO-vs-HGT dataset disagreement rather than renderer mapping drift
 
 ## Multi-Region Truth Matrix
 
 Measured with `scripts/physical_truth_matrix.py`:
+
+The current case labels include both mountainous and low-relief samples. They are examples of the workflow, not a statement that physical-truth coverage should stay tied to these exact regions.
 
 - `alps_peak`
   - source-vs-`small_world` p95 abs: `275.228 m`
@@ -69,12 +71,12 @@ Measured with `scripts/physical_truth_matrix.py`:
 
 Interpretation:
 - low-relief coastal cases are effectively at dataset floor
-- steep-relief Alpine cases are no longer dominated by the old renderer mapping bug
+- steep-relief mountainous cases are no longer dominated by the old renderer mapping bug
 - some steep-relief subregions still retain `~5-56 m` p95 renderer error above the source-vs-`small_world` floor
 
 ## LOD6 Global-Base Experiment
 
-A full-Earth `lod_count = 6` experiment helped Alpine renderer-above-floor residuals, but not enough to justify its storage cost as the default strategy.
+A full-Earth `lod_count = 6` experiment helped sampled mountainous renderer-above-floor residuals, but not enough to justify its storage cost as the default strategy.
 
 Storage comparison:
 - official `lod_count = 5` Earth height asset: about `2.4G`
@@ -84,9 +86,11 @@ Current recommendation:
 - keep the base Earth height asset at `lod_count = 5`
 - use higher-quality regional overlays wherever steep-terrain physical truth matters
 
-## Swiss Overlay Fidelity Audit
+## Reference High-Relief Overlay Fidelity Audit
 
-The Swiss regional overlay (`source_data/swiss.tif`, native `80 m`) was rebuilt to the preprocess heuristic target (`lod_count = 9`).
+The current reference high-relief regional overlay sample (`source_data/swiss.tif`, native `80 m`) was rebuilt to the preprocess heuristic target (`lod_count = 9`).
+
+This dataset is the current local reference sample for steep-terrain validation, not the intended long-term limit of the workflow.
 
 Measured source-raster parity:
 - Bernese Oberland: `9.8 m RMS`, `22.0 m p95`
@@ -97,7 +101,7 @@ Operational finding:
 - high-LOD overlay builds originally crashed inside `libproj`
 - safe interim fix: disable similar-transformer cloning and force `GDAL_NUM_THREADS=1`
 
-## Swiss Overlay Truth Matrix In The Local HGT Overlap
+## Reference High-Relief Overlay Truth Matrix In The Current Local Overlap
 
 Measured with:
 
@@ -114,7 +118,7 @@ Results:
 - `swiss_border_north`: renderer vs source p95 `15.678 m`, renderer vs `small_world` p95 `35.897 m`
 
 Interpretation:
-- the rebuilt Swiss overlay is in the `~13-20 m` p95 class above its source raster in the HGT overlap strip
+- the current reference high-relief overlay sample is in the `~13-20 m` p95 class above its source raster in the available overlap strip
 - the remaining renderer-vs-`small_world` gap there is mostly dataset floor, not renderer frame error
 
 ## End-To-End Overlay Path Regression
@@ -124,15 +128,15 @@ Measured with a `1 km`, `100 m AGL`, `64`-sample orbit around `46.70, 10.40`:
 - `small_world` anchored path: `40.314 m` p95 rendered AGL error, `75.148 m` max
 
 Interpretation:
-- source-anchored path placement over the rebuilt Swiss overlay is physically credible
-- `small_world`-anchored path placement in this strip is still limited by the HGT-vs-DEM floor, not by the renderer-local geodesy path
+- source-anchored path placement over the current reference high-relief overlay sample is physically credible
+- `small_world`-anchored path placement in this overlap strip is still limited by the HGT-vs-DEM floor, not by the renderer-local geodesy path
 
 ## Current Physical-Truth Status
 
 What remains open:
 - local `small_world` HGT coverage is too narrow for broad mountainous validation
 - steep-terrain global-base truth is still limited by base DEM quality and face resolution
-- the Swiss overlay is good enough for a physically credible drone demo, but not yet at sub-10 m p95 everywhere against its source raster
+- the current reference high-relief overlay sample is good enough for a physically credible drone demo, but not yet at sub-10 m p95 everywhere against its source raster
 
 Practical consequence:
 - for truth-critical mountain work, the current best path is a high-quality regional overlay plus source-raster-anchored validation, not a higher-cost global-base-only strategy
