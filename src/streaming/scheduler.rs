@@ -170,7 +170,10 @@ fn request_priority(
     (
         request.priority as u8,
         priority_class,
-        request.coordinate.lod,
+        // Coarser tiles (lower LOD) stream first: the ancestor-fallback design needs a
+        // loaded coarse ancestor before its descendants can refine, so inverting LOD here
+        // maximises time-to-first-visible-improvement instead of fetching leaves first.
+        u32::MAX - request.coordinate.lod,
         sequence,
     )
 }
@@ -1103,7 +1106,27 @@ mod tests {
     }
 
     #[test]
-    fn queue_replaces_coarse_imagery_with_deeper_imagery() {
+    fn queue_drains_coarse_imagery_before_deeper_imagery() {
+        let settings = TerrainStreamingSettings::online_imagery();
+        let mut queue = StreamingRequestQueue::default();
+
+        let mut coarse_request = albedo_request();
+        coarse_request.coordinate = crate::math::TileCoordinate::new(0, 3, IVec2::new(2, 1));
+
+        let mut deep_request = albedo_request();
+        deep_request.coordinate = crate::math::TileCoordinate::new(0, 9, IVec2::new(40, 17));
+
+        // Enqueue the deeper tile first to prove ordering is by LOD, not insertion order.
+        assert!(queue.enqueue(deep_request, &settings, 0));
+        assert!(queue.enqueue(coarse_request.clone(), &settings, 0));
+
+        let drained = queue.dequeue_batch(1);
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].request.coordinate, coarse_request.coordinate);
+    }
+
+    #[test]
+    fn queue_keeps_coarse_imagery_when_capacity_is_tight() {
         let settings = TerrainStreamingSettings::online_imagery().with_max_pending_requests(1);
         let mut queue = StreamingRequestQueue::default();
 
@@ -1113,12 +1136,14 @@ mod tests {
         let mut deep_request = albedo_request();
         deep_request.coordinate = crate::math::TileCoordinate::new(0, 9, IVec2::new(40, 17));
 
-        assert!(queue.enqueue(coarse_request, &settings, 0));
-        assert!(queue.enqueue(deep_request.clone(), &settings, 0));
+        // The coarse ancestor is retained; the deeper leaf is dropped at capacity because it
+        // cannot refine until its ancestor loads.
+        assert!(queue.enqueue(coarse_request.clone(), &settings, 0));
+        assert!(!queue.enqueue(deep_request, &settings, 0));
 
         let drained = queue.dequeue_batch(1);
         assert_eq!(drained.len(), 1);
-        assert_eq!(drained[0].request.coordinate, deep_request.coordinate);
+        assert_eq!(drained[0].request.coordinate, coarse_request.coordinate);
     }
 
     #[test]
