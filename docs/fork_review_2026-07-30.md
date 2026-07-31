@@ -144,6 +144,12 @@ failure memo + backoff; per-attachment gating; coarse-first dequeue; then atomic
 
 ## 5. `small_world` and the vertical-datum question
 
+> **Direction decided 2026-07-31:** `small_world` will be promoted to the **single source of truth** for all
+> reference-frame transformations (LLA HAE/MSL, ECEF, NED/ENU; AGL answered by the renderer), worked in a
+> follow-up session with both repos as sources. See `docs/next_session_handoff.md` for the integration plan.
+> The analysis below (esp. the verified `egm96` data in §5.2) stands as the fallback option and as validation
+> reference points for small_world's geoid.
+
 Context: `small_world` is a private in-house geodetic transformation library (LLA WGS84/MSL, ECEF, NED/ENU, …).
 The renderer must display the reported state of autonomous agents as realistically as possible, and **HAE vs MSL vs
 AGL produce very different results** — the vertical reference system must be well-defined end-to-end. In this fork
