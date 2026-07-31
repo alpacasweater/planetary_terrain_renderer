@@ -39,7 +39,7 @@ ureq = "2.12.1"
 
 # Single source of truth for all reference-frame transforms (LLA HAE/MSL, ECEF, NED/ENU)
 # and the EGM96 geoid. See src/math/geodesy.rs and docs/reference_frames.md.
-small_world = { git = "https://github.com/Swarm-Command/small_world.git", rev = "334f4b72a350bc48a1d071aab34bd8f51384ae70" }
+small_world = { git = "https://github.com/Swarm-Command/small_world.git", rev = "e2b080fbc4cf66c5cc48ecae26375e3e5499b53b" }
 
 rand = { version = "0.9.0", optional = true }
 metal = { version = "0.32.0", optional = true } # keep in sync with wgpu-hal used for capture
