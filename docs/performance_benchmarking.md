@@ -11,7 +11,7 @@ The benchmark contract is:
 ## Quick Run
 
 ```bash
-cd /Users/biggsba1/Documents/Playground/planetary_terrain_renderer
+cd path/to/planetary_terrain_renderer
 ./scripts/benchmark_spherical_multires.sh
 ```
 
@@ -180,7 +180,7 @@ Important:
 ## Direct Example Benchmark Mode
 
 ```bash
-cd /Users/biggsba1/Documents/Playground/planetary_terrain_renderer
+cd path/to/planetary_terrain_renderer
 RUST_LOG=perf=info \
 MULTIRES_OVERLAYS=swiss \
 MULTIRES_PRESENT_MODE=auto_novsync \

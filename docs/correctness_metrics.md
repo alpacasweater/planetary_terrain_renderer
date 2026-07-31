@@ -5,7 +5,7 @@ This repo includes ground, raster, matrix, and path-level correctness harnesses.
 ## Ground Alignment Harness
 
 ```bash
-cd /Users/biggsba1/Documents/Playground/planetary_terrain_renderer
+cd path/to/planetary_terrain_renderer
 python3 scripts/compare_small_world_ground.py \
   --lat 46.55 \
   --lon 10.60 \
@@ -22,7 +22,7 @@ Measures:
 ## Source Raster Parity Harness
 
 ```bash
-cd /Users/biggsba1/Documents/Playground/planetary_terrain_renderer
+cd path/to/planetary_terrain_renderer
 python3 scripts/compare_renderer_to_source_raster.py \
   --lat 46.55 \
   --lon 10.60 \
@@ -39,7 +39,7 @@ This isolates renderer/preprocess distortion from disagreement between the sourc
 ## Physical Truth Matrix
 
 ```bash
-cd /Users/biggsba1/Documents/Playground/planetary_terrain_renderer
+cd path/to/planetary_terrain_renderer
 python3 scripts/physical_truth_matrix.py \
   --json-out /tmp/physical_truth_matrix.json
 ```
@@ -58,7 +58,7 @@ The matrix reports:
 ## End-To-End Path Metric
 
 ```bash
-cd /Users/biggsba1/Documents/Playground/planetary_terrain_renderer
+cd path/to/planetary_terrain_renderer
 python3 scripts/path_truth_regression.py \
   --origin-lat 46.70 \
   --origin-lon 10.40 \

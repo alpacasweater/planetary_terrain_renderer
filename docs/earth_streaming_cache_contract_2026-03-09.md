@@ -20,8 +20,8 @@ This means every remote backend must eventually produce the same local artifact 
 ## Contract Summary
 
 Code lives in:
-- [src/streaming/cache_manifest.rs](/Users/biggsba1/Documents/rust_playground/planetary_terrain_renderer/src/streaming/cache_manifest.rs)
-- [src/streaming/source_contract.rs](/Users/biggsba1/Documents/rust_playground/planetary_terrain_renderer/src/streaming/source_contract.rs)
+- [src/streaming/cache_manifest.rs](../src/streaming/cache_manifest.rs)
+- [src/streaming/source_contract.rs](../src/streaming/source_contract.rs)
 
 Core types:
 - `StreamingCacheManifest`

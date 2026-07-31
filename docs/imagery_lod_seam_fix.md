@@ -28,7 +28,7 @@ This indicated a runtime tile lookup/positioning error rather than a preprocessi
 
 All production fixes are in:
 
-- [`src/shaders/functions.wgsl`](/Users/biggsba1/Documents/Playground/planetary_terrain_renderer/src/shaders/functions.wgsl)
+- [`src/shaders/functions.wgsl`](../src/shaders/functions.wgsl)
 
 ### 1) Canonical world-space LOD remap in `coordinate_change_lod`
 
@@ -104,11 +104,11 @@ Removed temporary local helper scripts:
 
 Production code change:
 
-- [`src/shaders/functions.wgsl`](/Users/biggsba1/Documents/Playground/planetary_terrain_renderer/src/shaders/functions.wgsl)
+- [`src/shaders/functions.wgsl`](../src/shaders/functions.wgsl)
 
 Documentation:
 
-- [`docs/imagery_lod_seam_fix.md`](/Users/biggsba1/Documents/Playground/planetary_terrain_renderer/docs/imagery_lod_seam_fix.md)
+- [`docs/imagery_lod_seam_fix.md`](../docs/imagery_lod_seam_fix.md)
 
 ## Build Verification
 
