@@ -1,11 +1,37 @@
-use bevy::math::DVec3;
+//! Reference-frame transformations for the renderer.
+//!
+//! `small_world` is the **single source of truth** for all WGS84 reference-frame math
+//! (LLA↔ECEF, NED/ENU, and the vertical datums HAE/MSL/AGL). This module is a thin
+//! renderer-facing facade over it: it owns exactly one renderer-specific concern — the
+//! swap between geodetic ECEF axes and the renderer's local axes,
+//! `(x, y, z) → (−x, z, y)` — and re-expresses small_world's results in the `DVec3`
+//! and struct types the rest of the renderer already uses.
+//!
+//! # Vertical datum contract
+//!
+//! Every altitude that flows through this module is **HAE** (height above the WGS84
+//! ellipsoid), matching the renderer's ellipsoid chart. Orthometric (MSL) and
+//! terrain-relative (AGL) heights must be converted to HAE *before* they reach the
+//! renderer; see `docs/reference_frames.md` for the per-interface contract. The geoid
+//! separation used for MSL↔HAE conversion also comes from small_world
+//! (`small_world::egm96`), so there is one geoid model in the system.
 
+use bevy::math::DVec3;
+use small_world::wgs84::{AltType, Ecef, Lla, Ned as SwNed};
+
+/// WGS84 semi-major axis (equatorial radius) in meters.
 pub const WGS84_SEMIMAJOR_AXIS_M: f64 = 6_378_137.0;
+/// WGS84 semi-minor axis (polar radius) in meters.
 pub const WGS84_SEMIMINOR_AXIS_M: f64 = 6_356_752.314_245_18;
+/// WGS84 first eccentricity squared.
 pub const WGS84_FIRST_ECCENTRICITY_SQ: f64 = 0.006_694_379_990_141_33;
+/// WGS84 second eccentricity squared.
 pub const WGS84_SECOND_ECCENTRICITY_SQ: f64 =
     WGS84_FIRST_ECCENTRICITY_SQ / (1.0 - WGS84_FIRST_ECCENTRICITY_SQ);
 
+/// Scale of the renderer's ellipsoid chart, i.e. the WGS84 ellipsoid axes expressed in
+/// the renderer's local `(x, y, z)` order. Kept in lock-step with
+/// [`crate::math::TerrainShape::WGS84`].
 #[inline(always)]
 fn wgs84_renderer_scale() -> DVec3 {
     DVec3::new(
@@ -15,16 +41,29 @@ fn wgs84_renderer_scale() -> DVec3 {
     )
 }
 
+/// The one place the geodetic-ECEF ↔ renderer-local axis swap lives.
 #[inline(always)]
 fn renderer_local_from_ecef(ecef: DVec3) -> DVec3 {
     DVec3::new(-ecef.x, ecef.z, ecef.y)
 }
 
+/// Inverse of [`renderer_local_from_ecef`] (the swap is its own inverse).
 #[inline(always)]
 fn ecef_from_renderer_local(local: DVec3) -> DVec3 {
     DVec3::new(-local.x, local.z, local.y)
 }
 
+#[inline(always)]
+fn dvec3_from_ecef(ecef: Ecef) -> DVec3 {
+    DVec3::new(ecef.x(), ecef.y(), ecef.z())
+}
+
+#[inline(always)]
+fn ecef_from_dvec3(ecef: DVec3) -> Ecef {
+    Ecef::new(ecef.x, ecef.y, ecef.z)
+}
+
+/// Geodetic latitude/longitude with an ellipsoidal (HAE) height.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LlaHae {
     pub lat_deg: f64,
@@ -32,46 +71,28 @@ pub struct LlaHae {
     pub hae_m: f64,
 }
 
+impl LlaHae {
+    #[inline(always)]
+    fn to_small_world(self) -> Lla {
+        Lla::new(self.lat_deg, self.lon_deg, self.hae_m, AltType::Wgs84)
+    }
+
+    #[inline(always)]
+    fn from_small_world(lla: Lla) -> Self {
+        Self {
+            lat_deg: lla.lat_deg(),
+            lon_deg: lla.lon_deg(),
+            hae_m: lla.alt_m(),
+        }
+    }
+}
+
+/// Local North-East-Down offset (meters), `d` positive down.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ned {
     pub n_m: f64,
     pub e_m: f64,
     pub d_m: f64,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct GeoConversionParams {
-    rot: [[f64; 3]; 3],
-    x0: f64,
-    y0: f64,
-    z0: f64,
-}
-
-impl GeoConversionParams {
-    #[inline(always)]
-    fn from_origin(origin: LlaHae) -> Self {
-        let lat0 = origin.lat_deg.to_radians();
-        let lon0 = origin.lon_deg.to_radians();
-        let alt0 = origin.hae_m;
-        let nu0 = WGS84_SEMIMAJOR_AXIS_M
-            / (1.0 - WGS84_FIRST_ECCENTRICITY_SQ * lat0.sin() * lat0.sin()).sqrt();
-        let s_lat0 = lat0.sin();
-        let c_lat0 = lat0.cos();
-        let s_lon0 = lon0.sin();
-        let c_lon0 = lon0.cos();
-
-        let rot = [
-            [-s_lat0 * c_lon0, -s_lat0 * s_lon0, c_lat0],
-            [-s_lon0, c_lon0, 0.0],
-            [-c_lat0 * c_lon0, -c_lat0 * s_lon0, -s_lat0],
-        ];
-
-        let x0 = (nu0 + alt0) * c_lat0 * c_lon0;
-        let y0 = (nu0 + alt0) * c_lat0 * s_lon0;
-        let z0 = (nu0 * (1.0 - WGS84_FIRST_ECCENTRICITY_SQ) + alt0) * s_lat0;
-
-        Self { rot, x0, y0, z0 }
-    }
 }
 
 #[inline(always)]
@@ -85,9 +106,9 @@ pub fn unit_from_lat_lon_degrees(lat_deg: f64, lon_deg: f64) -> DVec3 {
     (surface_local / wgs84_renderer_scale()).normalize()
 }
 
-#[inline(always)]
 /// Converts a renderer ellipsoid-chart unit position into geodetic latitude/longitude.
 /// The input is expected to describe a point on the unit sphere chart used by the renderer.
+#[inline(always)]
 pub fn lat_lon_degrees_from_unit(unit_position: DVec3) -> (f64, f64) {
     let surface_local = wgs84_renderer_scale() * unit_position.normalize();
     let surface_ecef = ecef_from_renderer_local(surface_local);
@@ -95,69 +116,39 @@ pub fn lat_lon_degrees_from_unit(unit_position: DVec3) -> (f64, f64) {
     (lla.lat_deg, lla.lon_deg)
 }
 
+/// LLA (HAE) → geodetic ECEF (meters), delegated to small_world.
 #[inline(always)]
 pub fn lla_hae_to_ecef(lla: LlaHae) -> DVec3 {
-    let lat = lla.lat_deg.to_radians();
-    let lon = lla.lon_deg.to_radians();
-    let s_lat = lat.sin();
-    let c_lat = lat.cos();
-    let s_lon = lon.sin();
-    let c_lon = lon.cos();
-    let nu = WGS84_SEMIMAJOR_AXIS_M / (1.0 - WGS84_FIRST_ECCENTRICITY_SQ * s_lat * s_lat).sqrt();
-
-    DVec3::new(
-        (nu + lla.hae_m) * c_lat * c_lon,
-        (nu + lla.hae_m) * c_lat * s_lon,
-        (nu * (1.0 - WGS84_FIRST_ECCENTRICITY_SQ) + lla.hae_m) * s_lat,
-    )
+    dvec3_from_ecef(lla.to_small_world().to_ecef())
 }
 
+/// Geodetic ECEF (meters) → LLA (HAE), delegated to small_world.
 #[inline(always)]
 pub fn ecef_to_lla_hae(ecef: DVec3) -> LlaHae {
-    let p = (ecef.x * ecef.x + ecef.y * ecef.y).sqrt();
-    let q = (ecef.z * WGS84_SEMIMAJOR_AXIS_M).atan2(p * WGS84_SEMIMINOR_AXIS_M);
-    let lat = (ecef.z + WGS84_SECOND_ECCENTRICITY_SQ * WGS84_SEMIMINOR_AXIS_M * q.sin().powi(3))
-        .atan2(p - WGS84_FIRST_ECCENTRICITY_SQ * WGS84_SEMIMAJOR_AXIS_M * q.cos().powi(3));
-    let lon = ecef.y.atan2(ecef.x);
-    let nu =
-        WGS84_SEMIMAJOR_AXIS_M / (1.0 - WGS84_FIRST_ECCENTRICITY_SQ * lat.sin() * lat.sin()).sqrt();
-    let hae = p / lat.cos() - nu;
-
-    LlaHae {
-        lat_deg: lat.to_degrees(),
-        lon_deg: lon.to_degrees(),
-        hae_m: hae,
-    }
+    LlaHae::from_small_world(Lla::from_ecef(ecef_from_dvec3(ecef)))
 }
 
+/// Renderer-local position → LLA (HAE), applying the axis swap then delegating.
 #[inline(always)]
 pub fn renderer_local_to_lla_hae(local: DVec3) -> LlaHae {
     ecef_to_lla_hae(ecef_from_renderer_local(local))
 }
 
+/// Local NED offset about `origin` → geodetic ECEF (meters), delegated to small_world.
 #[inline(always)]
 pub fn ned_to_ecef(ned: Ned, origin: LlaHae) -> DVec3 {
-    let cp = GeoConversionParams::from_origin(origin);
-
-    let dx = cp.rot[0][0] * ned.n_m + cp.rot[1][0] * ned.e_m + cp.rot[2][0] * ned.d_m;
-    let dy = cp.rot[0][1] * ned.n_m + cp.rot[1][1] * ned.e_m + cp.rot[2][1] * ned.d_m;
-    let dz = cp.rot[0][2] * ned.n_m + cp.rot[1][2] * ned.e_m + cp.rot[2][2] * ned.d_m;
-
-    DVec3::new(dx + cp.x0, dy + cp.y0, dz + cp.z0)
+    let ecef = SwNed::new(ned.n_m, ned.e_m, ned.d_m, origin.to_small_world()).to_ecef();
+    dvec3_from_ecef(ecef)
 }
 
+/// Geodetic ECEF (meters) → local NED offset about `origin`, delegated to small_world.
 #[inline(always)]
 pub fn ecef_to_ned(ecef: DVec3, origin: LlaHae) -> Ned {
-    let cp = GeoConversionParams::from_origin(origin);
-
-    let dx = ecef.x - cp.x0;
-    let dy = ecef.y - cp.y0;
-    let dz = ecef.z - cp.z0;
-
+    let ned = SwNed::from_ecef(ecef_from_dvec3(ecef), origin.to_small_world());
     Ned {
-        n_m: cp.rot[0][0] * dx + cp.rot[0][1] * dy + cp.rot[0][2] * dz,
-        e_m: cp.rot[1][0] * dx + cp.rot[1][1] * dy + cp.rot[1][2] * dz,
-        d_m: cp.rot[2][0] * dx + cp.rot[2][1] * dy + cp.rot[2][2] * dz,
+        n_m: ned.n(),
+        e_m: ned.e(),
+        d_m: ned.d(),
     }
 }
 
@@ -259,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn small_world_lla_to_ecef_matches_renderer_geodesy() {
+    fn facade_lla_to_ecef_matches_small_world() {
         let cases = [
             LlaHae {
                 lat_deg: 46.55,
@@ -295,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn small_world_ecef_to_lla_matches_renderer_geodesy() {
+    fn facade_ecef_to_lla_matches_small_world() {
         let cases = [
             LlaHae {
                 lat_deg: 46.55,
@@ -329,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn small_world_ned_to_ecef_matches_renderer_geodesy() {
+    fn facade_ned_to_ecef_matches_small_world() {
         let cases = [
             (
                 LlaHae {
