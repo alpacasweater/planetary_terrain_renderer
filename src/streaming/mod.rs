@@ -13,6 +13,7 @@ pub mod scheduler;
 pub mod source_contract;
 pub mod terrain_sampling;
 pub mod tile_source;
+pub mod util;
 
 pub use self::{
     cache_manifest::*, cache_writer::*, gibs::*, opentopography::*, scheduler::*,

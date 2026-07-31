@@ -5,6 +5,7 @@ use crate::{
         StreamingProviderError, StreamingSourceAvailability, StreamingSourceDescriptor,
         StreamingSourceKind, StreamingTileProvider, StreamingTileRequest,
         terrain_sampling::{normalize_lon_around, request_lon_lat_bbox, texture_sample_coordinate},
+        util::{decoding_result_to_f32, encode_height_tiff},
     },
     terrain_data::AttachmentFormat,
 };
@@ -15,10 +16,7 @@ use std::{
     io::{Cursor, Read},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tiff::{
-    decoder::{Decoder, DecodingResult, Limits},
-    encoder::{TiffEncoder, colortype},
-};
+use tiff::decoder::{Decoder, Limits};
 
 const DEFAULT_OPENTOPOGRAPHY_ENDPOINT: &str = "https://portal.opentopography.org/API/globaldem";
 const DEFAULT_OPENTOPOGRAPHY_DEM_TYPE: &str = "AW3D30_E";
@@ -340,27 +338,12 @@ fn decode_dem_tiff_with_limits(
         ))
     })?;
 
-    let mut samples = match decoder.read_image().map_err(|error| {
+    let raw = decoder.read_image().map_err(|error| {
         StreamingProviderError::Permanent(format!(
             "failed to decode OpenTopography TIFF body (content_type='{content_type}'): {error}"
         ))
-    })? {
-        DecodingResult::U8(values) => values.into_iter().map(f32::from).collect(),
-        DecodingResult::U16(values) => values.into_iter().map(|value| value as f32).collect(),
-        DecodingResult::U32(values) => values.into_iter().map(|value| value as f32).collect(),
-        DecodingResult::U64(values) => values.into_iter().map(|value| value as f32).collect(),
-        DecodingResult::I8(values) => values.into_iter().map(f32::from).collect(),
-        DecodingResult::I16(values) => values.into_iter().map(|value| value as f32).collect(),
-        DecodingResult::I32(values) => values.into_iter().map(|value| value as f32).collect(),
-        DecodingResult::I64(values) => values.into_iter().map(|value| value as f32).collect(),
-        DecodingResult::F32(values) => values,
-        DecodingResult::F64(values) => values.into_iter().map(|value| value as f32).collect(),
-        DecodingResult::F16(_) => {
-            return Err(StreamingProviderError::Permanent(
-                "OpenTopography TIFF uses unsupported F16 samples".to_string(),
-            ));
-        }
-    };
+    })?;
+    let mut samples = decoding_result_to_f32(raw)?;
 
     if samples.len() != (width * height) as usize {
         return Err(StreamingProviderError::Permanent(format!(
@@ -567,23 +550,6 @@ fn bilinear_sample_f32(dem: &DecodedDem, u: f64, v: f64) -> f32 {
     } else {
         f32::NAN
     }
-}
-
-fn encode_height_tiff(
-    width: u32,
-    height: u32,
-    heights: &[f32],
-) -> Result<Vec<u8>, StreamingProviderError> {
-    let mut cursor = Cursor::new(Vec::new());
-    let mut encoder = TiffEncoder::new(&mut cursor).map_err(|error| {
-        StreamingProviderError::Permanent(format!("failed to create TIFF encoder: {error}"))
-    })?;
-    encoder
-        .write_image::<colortype::Gray32Float>(width, height, heights)
-        .map_err(|error| {
-            StreamingProviderError::Permanent(format!("failed to encode TIFF tile: {error}"))
-        })?;
-    Ok(cursor.into_inner())
 }
 
 fn map_ureq_error(error: ureq::Error) -> StreamingProviderError {

@@ -7,6 +7,7 @@ use crate::{
         StreamingSourceDescriptor, StreamingSourceKind, StreamingTileProvider,
         cache_writer::{StreamingCacheWriteError, write_materialized_tile},
         source_contract::StreamingTileRequest,
+        util::{decoding_result_to_f32, encode_height_tiff},
     },
     terrain_data::{AttachmentConfig, AttachmentFormat, AttachmentLabel, TileAtlas},
 };
@@ -19,10 +20,7 @@ use std::cmp::Reverse;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tiff::{
-    decoder::{Decoder, DecodingResult},
-    encoder::{TiffEncoder, colortype},
-};
+use tiff::decoder::Decoder;
 
 #[derive(Clone, Debug, PartialEq, Eq, Resource)]
 pub struct TerrainStreamingSettings {
@@ -920,43 +918,14 @@ fn decode_height_tiff(bytes: &[u8]) -> Result<(u32, u32, Vec<f32>), StreamingPro
         ))
     })?;
 
-    let samples = match decoder.read_image().map_err(|error| {
+    let raw = decoder.read_image().map_err(|error| {
         StreamingProviderError::Permanent(format!(
             "failed to decode local height TIFF body: {error}"
         ))
-    })? {
-        DecodingResult::F32(values) => values,
-        DecodingResult::U16(values) => values.into_iter().map(|value| value as f32).collect(),
-        DecodingResult::U32(values) => values.into_iter().map(|value| value as f32).collect(),
-        other => {
-            return Err(StreamingProviderError::Permanent(format!(
-                "unsupported local height TIFF sample type: {other:?}"
-            )));
-        }
-    };
+    })?;
+    let samples = decoding_result_to_f32(raw)?;
 
     Ok((width, height, samples))
-}
-
-fn encode_height_tiff(
-    width: u32,
-    height: u32,
-    heights: &[f32],
-) -> Result<Vec<u8>, StreamingProviderError> {
-    let mut cursor = Cursor::new(Vec::new());
-    let mut encoder = TiffEncoder::new(&mut cursor).map_err(|error| {
-        StreamingProviderError::Permanent(format!(
-            "failed to create derived height TIFF encoder: {error}"
-        ))
-    })?;
-    encoder
-        .write_image::<colortype::Gray32Float>(width, height, heights)
-        .map_err(|error| {
-            StreamingProviderError::Permanent(format!(
-                "failed to encode derived height TIFF: {error}"
-            ))
-        })?;
-    Ok(cursor.into_inner())
 }
 
 fn current_unix_ms() -> u64 {
