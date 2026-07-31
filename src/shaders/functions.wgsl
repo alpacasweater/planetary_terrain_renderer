@@ -277,18 +277,34 @@ fn coordinate_change_lod(coordinate: ptr<function, Coordinate>, new_lod: u32) {
     if (old_lod == new_lod) { return; }
     let old_face = (*coordinate).face;
 
-    let canonical = coordinate_from_unit_position(coordinate_to_unit_position((*coordinate)));
     let tile_count = exp2(f32(new_lod));
-    let scaled_uv = clamp(canonical.uv, vec2<f32>(0.0), vec2<f32>(1.0 - 1e-6)) * tile_count;
+    let lod_scale  = exp2(f32(new_lod) - f32(old_lod));
 
-    (*coordinate).face = canonical.face;
+    // Within a single face a LOD change is an exact power-of-two rescale of (xy + uv): it
+    // preserves the same world point with no floating-point drift, which is what the hot lookup
+    // path needs at high LOD. Only when this rescale leaves the face extent [0, tile_count] --
+    // i.e. the coordinate genuinely belongs to a neighbouring face -- do we fall back to the
+    // canonical cube-sphere round trip. That round trip carries ~2^-23 face-global error, so
+    // restricting it to the cross-face case (defect 14) keeps same-face lookups texel-exact
+    // while still fixing the cross-face LOD seam.
+    let same_face_scaled = (vec2<f32>((*coordinate).xy) + (*coordinate).uv) * lod_scale;
+
+    var new_face  = old_face;
+    var scaled_uv = clamp(same_face_scaled, vec2<f32>(0.0), vec2<f32>(tile_count * (1.0 - 1e-6)));
+
+    if (any(same_face_scaled < vec2<f32>(0.0)) || any(same_face_scaled > vec2<f32>(tile_count))) {
+        let canonical = coordinate_from_unit_position(coordinate_to_unit_position((*coordinate)));
+        new_face  = canonical.face;
+        scaled_uv = clamp(canonical.uv, vec2<f32>(0.0), vec2<f32>(1.0 - 1e-6)) * tile_count;
+    }
+
+    (*coordinate).face = new_face;
     (*coordinate).lod = new_lod;
     (*coordinate).xy = vec2<u32>(scaled_uv);
     (*coordinate).uv = scaled_uv % 1.0;
 
 #ifdef FRAGMENT
-    let lod_scale = exp2(f32(new_lod) - f32(old_lod));
-    if (canonical.face == old_face) {
+    if (new_face == old_face) {
         (*coordinate).uv_dx *= lod_scale;
         (*coordinate).uv_dy *= lod_scale;
     } else {
