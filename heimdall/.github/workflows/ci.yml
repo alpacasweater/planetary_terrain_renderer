@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-and-test:
+    name: Lint and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # The small_world dependency is a private repo; GITHUB_TOKEN is scoped to this repo only,
+      # so Cargo needs a fine-grained PAT with read access to Swarm-Command/small_world stored as
+      # the SMALL_WORLD_TOKEN secret (see README "Building").
+      - name: Authorize private small_world dependency
+        run: |
+          git config --global \
+            url."https://x-access-token:${SMALL_WORLD_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
+        env:
+          SMALL_WORLD_TOKEN: ${{ secrets.SMALL_WORLD_TOKEN }}
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test

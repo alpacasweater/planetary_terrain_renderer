@@ -1,0 +1,25 @@
+[package]
+name = "heimdall"
+description = "Georeferenced real-world asset visualization: streamed terrain + imagery on a WGS84 globe with survey-correct HAE/MSL/AGL/ECEF placement."
+version = "0.1.0-dev"
+edition = "2024"
+publish = false
+
+[dependencies]
+# Single source of truth for all reference-frame transforms (LLA HAE/MSL, ECEF, NED/ENU) and the
+# EGM geoid. See docs/reference_frames.md.
+#
+# NOTE: pinned to the rev that adds EGM96::from_bytes (in-memory geoid). This rev currently lives
+# on the `claude/terrain-renderer-refactor-9z4mfc` branch — merge that branch to small_world main
+# and re-pin when convenient (tracked in docs/design.md §10).
+small_world = { git = "https://github.com/Swarm-Command/small_world.git", rev = "334f4b72a350bc48a1d071aab34bd8f51384ae70" }
+
+# Rendering (bevy + big_space), tile fetch/cache (reqwest/rusqlite/pmtiles), and image decode land
+# with their milestones (M0+); see docs/roadmap.md. Kept out until needed to keep builds fast.
+
+[lints.clippy]
+# The codebase is CI-gated at -D warnings; keep the default lint set.
+
+# Standalone workspace root: prevents cargo from walking up into a parent workspace when this
+# tree is vendored inside another repo (it is seeded from planetary_terrain_renderer/heimdall/).
+[workspace]
