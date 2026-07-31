@@ -4,8 +4,8 @@ use crate::{
     plugin::TerrainSettings,
     render::TerrainUniform,
     streaming::{
-        CacheFirstLocalTileSource, LocalTileRequest, LocalTileSourceKind, StreamingRequestPriority,
-        StreamingTileRequest,
+        CacheFirstLocalTileSource, LocalTileRequest, LocalTileSourceKind,
+        StreamingCompletionEvents, StreamingRequestPriority, StreamingTileRequest,
     },
     terrain::{CURRENT_GEODETIC_MAPPING_VERSION, TerrainConfig, TileAvailability},
     terrain_data::{
@@ -25,6 +25,11 @@ use bevy::{
 use big_space::prelude::CellCoord;
 use std::time::Instant;
 use std::{collections::VecDeque, path::PathBuf};
+
+/// How often (in frames) the tile atlas runs a full re-reconciliation of every pending stream
+/// tile as a backstop. Between these, pending tiles promote event-driven from streaming
+/// completions, so the expensive per-tile existence probing no longer happens every frame.
+const PENDING_REFRESH_INTERVAL: u64 = 8;
 
 /// The current state of a tile of a [`TileAtlas`].
 ///
@@ -350,8 +355,20 @@ impl TileAtlas {
         mut tile_trees: ResMut<TerrainViewComponents<TileTree>>,
         mut tile_atlases: Query<&mut TileAtlas>,
         perf_telemetry: Res<TerrainPerfTelemetry>,
+        mut completions: ResMut<StreamingCompletionEvents>,
+        mut frame: Local<u64>,
     ) {
         let start = Instant::now();
+
+        // Event-driven promotion: only tiles whose streamed writes just landed are re-checked,
+        // each with a single targeted existence probe -- instead of re-statting every pending
+        // tile's paths every frame. The full re-reconciliation still runs, but throttled, as a
+        // backstop for writes that produced no completion event (e.g. ancestor tiles filled as a
+        // side effect of a descendant fetch).
+        let completed = completions.drain();
+        let run_backstop = (*frame).is_multiple_of(PENDING_REFRESH_INTERVAL);
+        *frame = frame.wrapping_add(1);
+
         for (&(terrain, _view), tile_tree) in tile_trees.iter_mut() {
             let mut tile_atlas = tile_atlases.get_mut(terrain).unwrap();
 
@@ -363,9 +380,40 @@ impl TileAtlas {
                 tile_atlas.request_tile(tile_coordinate);
             }
 
-            tile_atlas.refresh_pending_stream_tiles();
+            for (terrain_path, coordinate) in &completed {
+                if *terrain_path == tile_atlas.terrain_path {
+                    tile_atlas.try_promote_pending_tile(*coordinate);
+                }
+            }
+
+            if run_backstop {
+                tile_atlas.refresh_pending_stream_tiles();
+            }
         }
         perf_telemetry.record_duration(PHASE_MAIN_TILE_ATLAS_UPDATE, start.elapsed());
+    }
+
+    /// Promotes a single pending tile if all its attachments are now present locally. Runs one
+    /// existence probe for exactly this tile, driven by a streaming-completion event.
+    fn try_promote_pending_tile(&mut self, tile_coordinate: TileCoordinate) {
+        let Some(pending) = self.pending_stream_tiles.get(&tile_coordinate) else {
+            return;
+        };
+        if pending.requests == 0 {
+            return;
+        }
+        if !self.missing_local_attachments(tile_coordinate).is_empty() {
+            return;
+        }
+
+        let pending = self.pending_stream_tiles.remove(&tile_coordinate).unwrap();
+        self.to_stream
+            .retain(|tile| tile.coordinate != tile_coordinate);
+        self.begin_loading_requested_tile(
+            tile_coordinate,
+            pending.requests,
+            pending.request_sequence,
+        );
     }
 
     pub fn update_terrain_buffer(
@@ -738,6 +786,65 @@ mod tests {
             !tile_atlas.pending_stream_tiles.contains_key(&coordinate),
             "a tile present under the configured asset root should promote"
         );
+        assert!(tile_atlas.tile_states.contains_key(&coordinate));
+
+        let _ = fs::remove_dir_all(&asset_root);
+    }
+
+    #[test]
+    fn completion_event_promotes_a_pending_tile_without_a_full_refresh() {
+        let unique = unique_suffix();
+        let terrain_path = format!("terrains/test_completion_{unique}");
+        let cache_root = format!("streaming_cache_test_{unique}");
+        let asset_root = std::env::temp_dir().join(format!("terrain_completion_root_{unique}"));
+        let coordinate = TileCoordinate::new(0, 0, IVec2::new(0, 0));
+
+        let mut config = TerrainConfig {
+            path: terrain_path,
+            shape: TerrainShape::WGS84,
+            lod_count: 1,
+            min_height: 0.0,
+            max_height: 1.0,
+            tile_availability: TileAvailability::FullFace,
+            ..Default::default()
+        };
+        config.add_attachment(
+            AttachmentLabel::Height,
+            AttachmentConfig {
+                texture_size: 4,
+                border_size: 0,
+                mip_level_count: 1,
+                mask: false,
+                format: AttachmentFormat::R32F,
+            },
+        );
+
+        let settings = TerrainSettings::default()
+            .with_streaming_cache_root(cache_root.clone())
+            .with_asset_root(asset_root.clone());
+        let mut buffers = Assets::<ShaderStorageBuffer>::default();
+        let mut tile_atlas = TileAtlas::new(&config, &mut buffers, &settings);
+
+        tile_atlas.request_tile(coordinate);
+        assert!(tile_atlas.pending_stream_tiles.contains_key(&coordinate));
+
+        // A completion event while the tile is still absent must not promote it.
+        tile_atlas.try_promote_pending_tile(coordinate);
+        assert!(tile_atlas.pending_stream_tiles.contains_key(&coordinate));
+
+        // Once the data lands, a single completion event promotes it with no full refresh pass.
+        let tile_path = cache_tile_asset_path(
+            PathBuf::from(&cache_root).as_path(),
+            &tile_atlas.terrain_path,
+            &AttachmentLabel::Height,
+            coordinate,
+        );
+        let tile_fs_path = asset_root.join(tile_path);
+        fs::create_dir_all(tile_fs_path.parent().unwrap()).unwrap();
+        fs::write(&tile_fs_path, b"height").unwrap();
+
+        tile_atlas.try_promote_pending_tile(coordinate);
+        assert!(!tile_atlas.pending_stream_tiles.contains_key(&coordinate));
         assert!(tile_atlas.tile_states.contains_key(&coordinate));
 
         let _ = fs::remove_dir_all(&asset_root);

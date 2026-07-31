@@ -9,9 +9,9 @@ use crate::{
     },
     shaders::{InternalShaders, load_terrain_shaders},
     streaming::{
-        NasaGibsImageryProvider, OpenTopographyHeightProvider, StreamingRequestQueue,
-        StreamingWorker, TerrainStreamingSettings, collect_streaming_requests,
-        finish_streaming_jobs, start_streaming_jobs,
+        NasaGibsImageryProvider, OpenTopographyHeightProvider, StreamingCompletionEvents,
+        StreamingRequestQueue, StreamingWorker, TerrainStreamingSettings,
+        collect_streaming_requests, finish_streaming_jobs, start_streaming_jobs,
     },
     terrain::{TerrainComponents, TerrainConfig},
     terrain_data::{
@@ -150,6 +150,7 @@ impl Plugin for TerrainPlugin {
             .init_resource::<TerrainStreamingSettings>()
             .init_resource::<StreamingRequestQueue>()
             .init_resource::<StreamingWorker>()
+            .init_resource::<StreamingCompletionEvents>()
             .init_asset_loader::<TiffLoader>()
             .add_systems(
                 PostUpdate,

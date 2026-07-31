@@ -395,6 +395,27 @@ impl StreamingWorker {
     }
 }
 
+/// Terrain-path + coordinate of streaming writes that completed this frame. The tile atlas
+/// drains these to promote the matching pending tiles with a single targeted existence check,
+/// instead of re-probing every pending tile's filesystem paths each frame. Missed events (e.g.
+/// ancestor tiles satisfied as a side effect) are still caught by the atlas's throttled
+/// full-reconciliation backstop.
+#[derive(Resource, Default)]
+pub struct StreamingCompletionEvents {
+    completed: Vec<(String, crate::math::TileCoordinate)>,
+}
+
+impl StreamingCompletionEvents {
+    fn record(&mut self, terrain_path: String, coordinate: crate::math::TileCoordinate) {
+        self.completed.push((terrain_path, coordinate));
+    }
+
+    /// Takes the queued completions, leaving the buffer empty for the next frame.
+    pub fn drain(&mut self) -> Vec<(String, crate::math::TileCoordinate)> {
+        std::mem::take(&mut self.completed)
+    }
+}
+
 pub fn start_streaming_jobs(
     settings: Res<TerrainStreamingSettings>,
     terrain_settings: Res<TerrainSettings>,
@@ -460,6 +481,7 @@ pub fn start_streaming_jobs(
 pub fn finish_streaming_jobs(
     mut queue: ResMut<StreamingRequestQueue>,
     mut worker: ResMut<StreamingWorker>,
+    mut completions: ResMut<StreamingCompletionEvents>,
 ) {
     let now_unix_ms = current_unix_ms();
     let mut remaining = Vec::with_capacity(worker.inflight.len());
@@ -475,6 +497,10 @@ pub fn finish_streaming_jobs(
                         path.display()
                     );
                     queue.record_success(&outcome.request);
+                    completions.record(
+                        outcome.request.terrain_path.clone(),
+                        outcome.request.coordinate,
+                    );
                     worker.stats.completed_total += 1;
                     worker.stats.cache_writes_total += 1;
                 }
