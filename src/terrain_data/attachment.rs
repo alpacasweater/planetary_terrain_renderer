@@ -6,12 +6,29 @@ use serde::{Deserialize, Serialize};
 use std::{fmt::Error, path::PathBuf, str::FromStr};
 use strum_macros::EnumIter;
 
+/// The custom attachment name the streaming subsystem treats as imagery. Streaming currently
+/// recognizes only this one custom attachment; naming a custom attachment anything else means it
+/// silently cannot stream. Kept as a single constant so that coupling is explicit in one place.
+pub const ALBEDO_ATTACHMENT_LABEL: &str = "albedo";
+
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Hash, Default)]
 pub enum AttachmentLabel {
     #[default]
     Height,
     Custom(String), // Todo: this should not be a heap allocated string
     Empty(usize),
+}
+
+impl AttachmentLabel {
+    /// The imagery/albedo attachment label.
+    pub fn albedo() -> Self {
+        Self::Custom(ALBEDO_ATTACHMENT_LABEL.to_string())
+    }
+
+    /// Whether this is the imagery/albedo attachment the streaming subsystem recognizes.
+    pub fn is_albedo(&self) -> bool {
+        matches!(self, Self::Custom(name) if name == ALBEDO_ATTACHMENT_LABEL)
+    }
 }
 
 impl From<&AttachmentLabel> for String {

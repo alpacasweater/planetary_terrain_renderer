@@ -115,5 +115,7 @@ fn terrain_has_albedo(terrain_asset_path: &str) -> bool {
         format!("assets/{terrain_asset_path}")
     };
 
-    Path::new(&fs_path).join("albedo").is_dir()
+    Path::new(&fs_path)
+        .join(crate::terrain_data::ALBEDO_ATTACHMENT_LABEL)
+        .is_dir()
 }

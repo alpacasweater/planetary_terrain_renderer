@@ -84,7 +84,7 @@ impl TerrainSettings {
 
     /// Stream height plus the conventional `albedo` attachment.
     pub fn with_albedo() -> Self {
-        Self::with_attachment("albedo")
+        Self::with_attachment(crate::terrain_data::ALBEDO_ATTACHMENT_LABEL)
     }
 
     pub fn with_upload_budget_bytes_per_frame(

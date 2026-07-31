@@ -68,7 +68,7 @@ impl From<&AttachmentLabel> for StreamedAttachmentKind {
     fn from(value: &AttachmentLabel) -> Self {
         match value {
             AttachmentLabel::Height => Self::Height,
-            AttachmentLabel::Custom(name) if name == "albedo" => Self::Imagery,
+            value if value.is_albedo() => Self::Imagery,
             AttachmentLabel::Custom(name) => Self::Custom(name.clone()),
             AttachmentLabel::Empty(index) => Self::Custom(format!("empty_{index}")),
         }

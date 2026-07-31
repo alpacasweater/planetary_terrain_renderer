@@ -177,10 +177,10 @@ fn request_priority(
 }
 
 fn attachment_priority(attachment_label: &AttachmentLabel) -> u8 {
+    // Height streams ahead of imagery and every other attachment.
     match attachment_label {
         AttachmentLabel::Height => 1,
-        AttachmentLabel::Custom(name) if name == "albedo" => 0,
-        AttachmentLabel::Custom(_) | AttachmentLabel::Empty(_) => 0,
+        _ => 0,
     }
 }
 
@@ -344,7 +344,7 @@ fn streaming_allowed_for(
 ) -> bool {
     match attachment_label {
         AttachmentLabel::Height => settings.stream_height,
-        AttachmentLabel::Custom(name) if name == "albedo" => settings.stream_imagery,
+        label if label.is_albedo() => settings.stream_imagery,
         AttachmentLabel::Custom(_) | AttachmentLabel::Empty(_) => false,
     }
 }
@@ -427,18 +427,16 @@ pub fn start_streaming_jobs(
 
         worker.inflight.push(IoTaskPool::get().spawn(async move {
             let result = match request.attachment_label {
-                AttachmentLabel::Custom(ref name) if name == "albedo" => {
-                    match cache_root.map(PathBuf::from) {
-                        Some(cache_root) => materialize_imagery_request_into_cache(
-                            &gibs,
-                            &request,
-                            &asset_root,
-                            &cache_root,
-                            stream_height,
-                        ),
-                        None => Err(StreamingTaskError::MissingCacheRoot),
-                    }
-                }
+                ref label if label.is_albedo() => match cache_root.map(PathBuf::from) {
+                    Some(cache_root) => materialize_imagery_request_into_cache(
+                        &gibs,
+                        &request,
+                        &asset_root,
+                        &cache_root,
+                        stream_height,
+                    ),
+                    None => Err(StreamingTaskError::MissingCacheRoot),
+                },
                 AttachmentLabel::Height => match cache_root.map(PathBuf::from) {
                     Some(cache_root) => materialize_height_request_into_cache(
                         &opentopography,
@@ -509,12 +507,10 @@ fn should_downgrade_streaming_failure_log(
     request: &StreamingTileRequest,
 ) -> bool {
     matches!(
-        (error, &request.attachment_label),
-        (
-            StreamingTaskError::Provider(StreamingProviderError::Unsupported(reason)),
-            AttachmentLabel::Custom(name)
-        ) if name == "albedo"
-            && reason.contains("tile longitude span crosses the antimeridian")
+        error,
+        StreamingTaskError::Provider(StreamingProviderError::Unsupported(reason))
+            if request.attachment_label.is_albedo()
+                && reason.contains("tile longitude span crosses the antimeridian")
     )
 }
 
