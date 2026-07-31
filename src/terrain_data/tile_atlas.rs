@@ -205,6 +205,13 @@ impl TileAtlas {
             .canceled_stale_upload_attachment_tiles_total += count as u64;
     }
 
+    /// Whether a budget-deferred upload still targets a live slot. Relevance is purely a
+    /// question of slot identity: the upload matters iff this coordinate still occupies exactly
+    /// `atlas_index`. It must NOT depend on `requests > 0` -- a tile released while its upload is
+    /// deferred stays cached (`Loaded`) at its slot, and dropping the upload there would leave the
+    /// slot holding the previous occupant's texels, which a later re-request would then serve.
+    /// When the slot is reused, `begin_loading_requested_tile` evicts the old coordinate from
+    /// `tile_states`, so a stale upload resolves to `None` and is correctly discarded.
     pub(crate) fn is_upload_tile_relevant(
         &self,
         coordinate: TileCoordinate,
@@ -212,7 +219,7 @@ impl TileAtlas {
     ) -> bool {
         self.tile_states
             .get(&coordinate)
-            .map(|tile| tile.requests > 0 && tile.atlas_index == atlas_index)
+            .map(|tile| tile.atlas_index == atlas_index)
             .unwrap_or(false)
     }
 
@@ -670,6 +677,87 @@ mod tests {
         assert_eq!(tile_atlas.to_load.len(), 1);
         assert_eq!(tile_atlas.to_load[0].coordinate, coordinate);
         assert_eq!(tile_atlas.to_load[0].label, AttachmentLabel::Height);
+
+        let _ = fs::remove_dir_all(PathBuf::from("assets").join(cache_root));
+    }
+
+    #[test]
+    fn deferred_upload_stays_relevant_after_release_until_slot_is_reused() {
+        let unique = unique_suffix();
+        let terrain_path = format!("assets/terrains/test_upload_relevant_{unique}");
+        let cache_root = format!("streaming_cache_test_{unique}");
+        let coord_a = TileCoordinate::new(0, 0, IVec2::new(0, 0));
+        let coord_b = TileCoordinate::new(0, 1, IVec2::new(0, 0));
+
+        let mut config = TerrainConfig {
+            path: terrain_path.clone(),
+            shape: TerrainShape::WGS84,
+            lod_count: 3,
+            min_height: 0.0,
+            max_height: 1.0,
+            tile_availability: TileAvailability::FullFace,
+            ..Default::default()
+        };
+        config.add_attachment(
+            AttachmentLabel::Height,
+            AttachmentConfig {
+                texture_size: 4,
+                border_size: 0,
+                mip_level_count: 1,
+                mask: false,
+                format: AttachmentFormat::R32F,
+            },
+        );
+
+        // A single atlas slot forces the released tile's slot to be the one reused next.
+        let mut settings =
+            TerrainSettings::default().with_streaming_cache_root(cache_root.clone());
+        settings.atlas_size = 1;
+        let mut buffers = Assets::<ShaderStorageBuffer>::default();
+        let mut tile_atlas = TileAtlas::new(&config, &mut buffers, &settings);
+
+        for coordinate in [coord_a, coord_b] {
+            let tile_path = cache_tile_asset_path(
+                PathBuf::from(&cache_root).as_path(),
+                &tile_atlas.terrain_path,
+                &AttachmentLabel::Height,
+                coordinate,
+            );
+            let tile_fs_path = PathBuf::from("assets").join(tile_path);
+            fs::create_dir_all(tile_fs_path.parent().unwrap()).unwrap();
+            fs::write(&tile_fs_path, b"height").unwrap();
+        }
+
+        // Load tile A into the single slot and mark it Loaded.
+        tile_atlas.request_tile(coord_a);
+        let atlas_index = tile_atlas.tile_states.get(&coord_a).unwrap().atlas_index;
+        tile_atlas.tile_loaded(
+            AttachmentTile {
+                coordinate: coord_a,
+                label: AttachmentLabel::Height,
+            },
+            AttachmentData::R32F(vec![0.0; 16]),
+        );
+        assert!(tile_atlas.is_upload_tile_relevant(coord_a, atlas_index));
+
+        // Releasing A drops its request count to zero but keeps it cached in its slot; a
+        // budget-deferred upload for A must still be considered relevant.
+        tile_atlas.release_tile(coord_a);
+        assert_eq!(tile_atlas.tile_states.get(&coord_a).unwrap().requests, 0);
+        assert!(
+            tile_atlas.is_upload_tile_relevant(coord_a, atlas_index),
+            "a released-but-cached tile must keep its deferred upload so the slot is not left \
+             holding stale texels"
+        );
+
+        // Requesting B reuses A's slot and evicts A; A's deferred upload is now stale.
+        tile_atlas.request_tile(coord_b);
+        assert_eq!(
+            tile_atlas.tile_states.get(&coord_b).unwrap().atlas_index,
+            atlas_index
+        );
+        assert!(tile_atlas.tile_states.get(&coord_a).is_none());
+        assert!(!tile_atlas.is_upload_tile_relevant(coord_a, atlas_index));
 
         let _ = fs::remove_dir_all(PathBuf::from("assets").join(cache_root));
     }
