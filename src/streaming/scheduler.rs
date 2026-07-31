@@ -84,8 +84,49 @@ pub struct StreamingQueueStats {
     pub dropped_offline_total: u64,
     pub dropped_policy_total: u64,
     pub dropped_capacity_total: u64,
+    pub dropped_backoff_total: u64,
+    pub dropped_permanent_total: u64,
     pub completed_total: u64,
     pub failed_total: u64,
+}
+
+/// Base delay before a transiently-failed request may be retried.
+const STREAMING_RETRY_BASE_MS: u64 = 2_000;
+/// Ceiling on the exponential retry delay so a long-lived transient failure keeps
+/// retrying occasionally instead of drifting to effectively-never.
+const STREAMING_RETRY_MAX_MS: u64 = 300_000;
+
+/// Remembered outcome of a failed streaming request, so the scheduler stops re-spawning
+/// tasks for the same tile every frame (defect: infinite retry with no backoff).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StreamingFailureState {
+    /// Transient failure: eligible to retry once `retry_after_unix_ms` has passed.
+    Backoff {
+        retry_after_unix_ms: u64,
+        attempts: u32,
+    },
+    /// Structural failure for this exact tile (unsupported geometry, area-limit, bad
+    /// config). Never retried; the tile renders from its loaded ancestor instead.
+    Permanent,
+}
+
+/// Whether a task error is permanent for this tile coordinate or worth retrying later.
+fn is_permanent_failure(error: &StreamingTaskError) -> bool {
+    match error {
+        StreamingTaskError::Provider(StreamingProviderError::Permanent(_))
+        | StreamingTaskError::Provider(StreamingProviderError::Unsupported(_))
+        | StreamingTaskError::MissingCacheRoot
+        | StreamingTaskError::UnsupportedAttachment(_) => true,
+        StreamingTaskError::Provider(StreamingProviderError::Transient(_))
+        | StreamingTaskError::Provider(StreamingProviderError::Unavailable(_))
+        | StreamingTaskError::CacheWrite(_) => false,
+    }
+}
+
+fn backoff_delay_ms(attempts: u32) -> u64 {
+    STREAMING_RETRY_BASE_MS
+        .saturating_mul(1_u64 << attempts.saturating_sub(1).min(20))
+        .min(STREAMING_RETRY_MAX_MS)
 }
 
 #[derive(Clone, Debug)]
@@ -116,6 +157,7 @@ impl StreamingRequestKey {
 pub struct StreamingRequestQueue {
     pending: HashMap<StreamingRequestKey, QueuedStreamingRequest>,
     inflight: HashSet<StreamingRequestKey>,
+    failures: HashMap<StreamingRequestKey, StreamingFailureState>,
     next_sequence: u64,
     stats: StreamingQueueStats,
 }
@@ -158,6 +200,7 @@ impl StreamingRequestQueue {
         &mut self,
         request: StreamingTileRequest,
         settings: &TerrainStreamingSettings,
+        now_unix_ms: u64,
     ) -> bool {
         if settings.offline_only {
             self.stats.dropped_offline_total += 1;
@@ -173,6 +216,23 @@ impl StreamingRequestQueue {
         if self.pending.contains_key(&key) || self.inflight.contains(&key) {
             self.stats.deduped_total += 1;
             return false;
+        }
+
+        // Respect remembered failures so a permanently- or transiently-failing tile is not
+        // re-requested every frame. Backoff windows expire; permanent failures never retry.
+        match self.failures.get(&key) {
+            Some(StreamingFailureState::Permanent) => {
+                self.stats.dropped_permanent_total += 1;
+                return false;
+            }
+            Some(StreamingFailureState::Backoff {
+                retry_after_unix_ms,
+                ..
+            }) if now_unix_ms < *retry_after_unix_ms => {
+                self.stats.dropped_backoff_total += 1;
+                return false;
+            }
+            _ => {}
         }
 
         let sequence = self.next_sequence;
@@ -248,11 +308,35 @@ impl StreamingRequestQueue {
             .remove(&StreamingRequestKey::from_request(request));
     }
 
-    pub fn note_completed(&mut self) {
+    /// Clears any remembered failure once a tile materializes successfully.
+    fn record_success(&mut self, request: &StreamingTileRequest) {
+        self.failures
+            .remove(&StreamingRequestKey::from_request(request));
         self.stats.completed_total += 1;
     }
 
-    pub fn note_failed(&mut self) {
+    /// Remembers a failed request so it is not re-requested until its backoff expires (or
+    /// ever, for permanent failures). Escalates the backoff on repeated transient failures.
+    fn record_failure(
+        &mut self,
+        request: &StreamingTileRequest,
+        error: &StreamingTaskError,
+        now_unix_ms: u64,
+    ) {
+        let key = StreamingRequestKey::from_request(request);
+        let state = if is_permanent_failure(error) {
+            StreamingFailureState::Permanent
+        } else {
+            let attempts = match self.failures.get(&key) {
+                Some(StreamingFailureState::Backoff { attempts, .. }) => attempts.saturating_add(1),
+                _ => 1,
+            };
+            StreamingFailureState::Backoff {
+                retry_after_unix_ms: now_unix_ms.saturating_add(backoff_delay_ms(attempts)),
+                attempts,
+            }
+        };
+        self.failures.insert(key, state);
         self.stats.failed_total += 1;
     }
 }
@@ -273,9 +357,10 @@ pub fn collect_streaming_requests(
     settings: Res<TerrainStreamingSettings>,
     mut queue: ResMut<StreamingRequestQueue>,
 ) {
+    let now_unix_ms = current_unix_ms();
     for mut atlas in &mut atlases {
         for request in atlas.drain_streaming_requests() {
-            queue.enqueue(request, &settings);
+            queue.enqueue(request, &settings, now_unix_ms);
         }
     }
 }
@@ -382,6 +467,7 @@ pub fn finish_streaming_jobs(
     mut queue: ResMut<StreamingRequestQueue>,
     mut worker: ResMut<StreamingWorker>,
 ) {
+    let now_unix_ms = current_unix_ms();
     let mut remaining = Vec::with_capacity(worker.inflight.len());
     for mut task in std::mem::take(&mut worker.inflight) {
         if let Some(outcome) = bevy::tasks::block_on(poll_once(&mut task)) {
@@ -394,7 +480,7 @@ pub fn finish_streaming_jobs(
                         outcome.request.attachment_label,
                         path.display()
                     );
-                    queue.note_completed();
+                    queue.record_success(&outcome.request);
                     worker.stats.completed_total += 1;
                     worker.stats.cache_writes_total += 1;
                 }
@@ -415,7 +501,7 @@ pub fn finish_streaming_jobs(
                             message
                         );
                     }
-                    queue.note_failed();
+                    queue.record_failure(&outcome.request, &error, now_unix_ms);
                     worker.stats.failed_total += 1;
                 }
             }
@@ -942,8 +1028,8 @@ mod tests {
         let request = albedo_request();
         let mut queue = StreamingRequestQueue::default();
 
-        assert!(queue.enqueue(request.clone(), &settings));
-        assert!(!queue.enqueue(request.clone(), &settings));
+        assert!(queue.enqueue(request.clone(), &settings, 0));
+        assert!(!queue.enqueue(request.clone(), &settings, 0));
         assert_eq!(queue.pending_count(), 1);
         assert_eq!(queue.stats().enqueued_total, 1);
         assert_eq!(queue.stats().deduped_total, 1);
@@ -954,7 +1040,7 @@ mod tests {
         let settings = TerrainStreamingSettings::default();
         let mut queue = StreamingRequestQueue::default();
 
-        assert!(!queue.enqueue(albedo_request(), &settings));
+        assert!(!queue.enqueue(albedo_request(), &settings, 0));
         assert_eq!(queue.pending_count(), 0);
         assert_eq!(queue.stats().dropped_offline_total, 1);
     }
@@ -966,7 +1052,7 @@ mod tests {
         let mut request = albedo_request();
         request.attachment_label = AttachmentLabel::Height;
 
-        assert!(!queue.enqueue(request, &settings));
+        assert!(!queue.enqueue(request, &settings, 0));
         assert_eq!(queue.pending_count(), 0);
         assert_eq!(queue.stats().dropped_policy_total, 1);
     }
@@ -984,8 +1070,8 @@ mod tests {
         focused.coordinate = crate::math::TileCoordinate::new(0, 2, IVec2::new(1, 1));
         focused.priority = StreamingRequestPriority::Focused;
 
-        assert!(queue.enqueue(background, &settings));
-        assert!(queue.enqueue(focused.clone(), &settings));
+        assert!(queue.enqueue(background, &settings, 0));
+        assert!(queue.enqueue(focused.clone(), &settings, 0));
 
         let drained = queue.dequeue_batch(1);
         assert_eq!(drained.len(), 1);
@@ -1007,8 +1093,8 @@ mod tests {
         let mut imagery_request = albedo_request();
         imagery_request.coordinate = crate::math::TileCoordinate::new(0, 4, IVec2::new(8, 2));
 
-        assert!(queue.enqueue(height_request, &settings));
-        assert!(!queue.enqueue(imagery_request, &settings));
+        assert!(queue.enqueue(height_request, &settings, 0));
+        assert!(!queue.enqueue(imagery_request, &settings, 0));
 
         let drained = queue.dequeue_batch(1);
         assert_eq!(drained.len(), 1);
@@ -1027,12 +1113,82 @@ mod tests {
         let mut deep_request = albedo_request();
         deep_request.coordinate = crate::math::TileCoordinate::new(0, 9, IVec2::new(40, 17));
 
-        assert!(queue.enqueue(coarse_request, &settings));
-        assert!(queue.enqueue(deep_request.clone(), &settings));
+        assert!(queue.enqueue(coarse_request, &settings, 0));
+        assert!(queue.enqueue(deep_request.clone(), &settings, 0));
 
         let drained = queue.dequeue_batch(1);
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].request.coordinate, deep_request.coordinate);
+    }
+
+    #[test]
+    fn transient_failures_back_off_before_retrying() {
+        let settings = TerrainStreamingSettings::online_imagery();
+        let mut queue = StreamingRequestQueue::default();
+        let request = albedo_request();
+
+        queue.record_failure(
+            &request,
+            &StreamingTaskError::Provider(StreamingProviderError::Transient("boom".to_string())),
+            1_000,
+        );
+
+        // Within the backoff window the same tile is not re-requested.
+        assert!(!queue.enqueue(request.clone(), &settings, 1_500));
+        assert_eq!(queue.stats().dropped_backoff_total, 1);
+        assert_eq!(queue.pending_count(), 0);
+
+        // Once the window elapses the tile is eligible again.
+        assert!(queue.enqueue(request, &settings, 1_000 + STREAMING_RETRY_BASE_MS + 1));
+    }
+
+    #[test]
+    fn permanent_failures_are_never_retried() {
+        let settings = TerrainStreamingSettings::online_imagery();
+        let mut queue = StreamingRequestQueue::default();
+        let request = albedo_request();
+
+        queue.record_failure(
+            &request,
+            &StreamingTaskError::Provider(StreamingProviderError::Unsupported(
+                "tile longitude span crosses the antimeridian".to_string(),
+            )),
+            0,
+        );
+
+        assert!(!queue.enqueue(request, &settings, u64::MAX / 2));
+        assert_eq!(queue.stats().dropped_permanent_total, 1);
+        assert_eq!(queue.pending_count(), 0);
+    }
+
+    #[test]
+    fn success_clears_the_failure_memo() {
+        let settings = TerrainStreamingSettings::online_imagery();
+        let mut queue = StreamingRequestQueue::default();
+        let request = albedo_request();
+
+        queue.record_failure(
+            &request,
+            &StreamingTaskError::Provider(StreamingProviderError::Transient("boom".to_string())),
+            0,
+        );
+        queue.record_success(&request);
+
+        // With the memo cleared the tile can be requested again immediately.
+        assert!(queue.enqueue(request, &settings, 0));
+    }
+
+    #[test]
+    fn repeated_transient_failures_escalate_the_backoff() {
+        let mut queue = StreamingRequestQueue::default();
+        let request = albedo_request();
+        let transient =
+            StreamingTaskError::Provider(StreamingProviderError::Transient("boom".to_string()));
+
+        queue.record_failure(&request, &transient, 0);
+        queue.record_failure(&request, &transient, 0);
+        // Second attempt uses a strictly longer delay than the first.
+        assert!(backoff_delay_ms(2) > backoff_delay_ms(1));
     }
 
     #[test]
@@ -1222,7 +1378,7 @@ mod tests {
         }
 
         let mut queue = StreamingRequestQueue::default();
-        assert!(!queue.enqueue(request, &TerrainStreamingSettings::default()));
+        assert!(!queue.enqueue(request, &TerrainStreamingSettings::default(), 0));
         assert_eq!(queue.stats().dropped_offline_total, 1);
 
         fs::remove_dir_all(asset_root).unwrap();
