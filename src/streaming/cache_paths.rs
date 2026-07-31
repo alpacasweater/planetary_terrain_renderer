@@ -1,6 +1,5 @@
 use crate::{
-    math::TileCoordinate,
-    streaming::cache_manifest::CURRENT_STREAMING_CACHE_FORMAT_VERSION,
+    math::TileCoordinate, streaming::cache_manifest::CURRENT_STREAMING_CACHE_FORMAT_VERSION,
     terrain_data::AttachmentLabel,
 };
 use std::path::{Path, PathBuf};
@@ -32,7 +31,8 @@ pub fn cache_tile_asset_path(
     coordinate: TileCoordinate,
 ) -> PathBuf {
     coordinate.path(
-        &versioned_cache_root(cache_root).join(attachment_relative_root(terrain_path, attachment_label)),
+        &versioned_cache_root(cache_root)
+            .join(attachment_relative_root(terrain_path, attachment_label)),
     )
 }
 

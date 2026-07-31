@@ -107,8 +107,7 @@ fn percentile(sorted_samples: &[f64], percentile: f64) -> f64 {
     if sorted_samples.is_empty() {
         return 0.0;
     }
-    let index =
-        ((sorted_samples.len() - 1) as f64 * percentile.clamp(0.0, 1.0)).round() as usize;
+    let index = ((sorted_samples.len() - 1) as f64 * percentile.clamp(0.0, 1.0)).round() as usize;
     sorted_samples[index]
 }
 

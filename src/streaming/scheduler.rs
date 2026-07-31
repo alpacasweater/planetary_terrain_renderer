@@ -3,8 +3,8 @@ use crate::{
     streaming::{
         CacheFirstLocalTileSource, CacheTileEncoding, CachedTileMetadata, LocalTileRequest,
         LocalTileSourceKind, NasaGibsImageryProvider, OpenTopographyHeightProvider,
-        StreamedAttachmentKind, StreamingProviderError, StreamingSourceDescriptor,
-        StreamingSourceAvailability, StreamingSourceKind, StreamingTileProvider,
+        StreamedAttachmentKind, StreamingProviderError, StreamingSourceAvailability,
+        StreamingSourceDescriptor, StreamingSourceKind, StreamingTileProvider,
         cache_writer::{StreamingCacheWriteError, write_materialized_tile},
         source_contract::StreamingTileRequest,
     },
@@ -492,16 +492,12 @@ pub fn finish_streaming_jobs(
                     if should_downgrade_streaming_failure_log(&error, &outcome.request) {
                         debug!(
                             "Streaming request skipped for {:?} {:?}: {}",
-                            outcome.request.coordinate,
-                            outcome.request.attachment_label,
-                            message
+                            outcome.request.coordinate, outcome.request.attachment_label, message
                         );
                     } else {
                         warn!(
                             "Streaming request failed for {:?} {:?}: {}",
-                            outcome.request.coordinate,
-                            outcome.request.attachment_label,
-                            message
+                            outcome.request.coordinate, outcome.request.attachment_label, message
                         );
                     }
                     queue.record_failure(&outcome.request, &error, now_unix_ms);
@@ -581,8 +577,7 @@ fn materialize_height_request_into_cache<P: StreamingTileProvider>(
         StreamingSourceAvailability::Unavailable { reason } => {
             debug!(
                 "Remote height stream unavailable for {:?}: {}. Falling back to local height derivation.",
-                request.coordinate,
-                reason
+                request.coordinate, reason
             );
             materialize_derived_height_into_cache(request, asset_root, cache_root)
         }
@@ -1078,7 +1073,10 @@ mod tests {
 
         let drained = queue.dequeue_batch(1);
         assert_eq!(drained.len(), 1);
-        assert_eq!(drained[0].request.priority, StreamingRequestPriority::Focused);
+        assert_eq!(
+            drained[0].request.priority,
+            StreamingRequestPriority::Focused
+        );
         assert_eq!(drained[0].request.coordinate, focused.coordinate);
     }
 

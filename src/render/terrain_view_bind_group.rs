@@ -8,7 +8,6 @@ use crate::{
     terrain_data::{TileTree, TileTreeEntry},
     terrain_view::TerrainViewComponents,
 };
-use std::time::Instant;
 use bevy::{
     ecs::{
         query::ROQueryItem,
@@ -24,6 +23,7 @@ use bevy::{
         sync_world::MainEntity,
     },
 };
+use std::time::Instant;
 
 #[derive(AsBindGroup)]
 pub struct IndirectBindGroup {

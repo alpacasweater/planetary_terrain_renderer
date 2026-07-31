@@ -1,5 +1,8 @@
 use crate::{
-    perf::{PHASE_RENDER_NODE_TERRAIN_PASS_CPU, PHASE_RENDER_PREPARE_DEPTH_TEXTURES, TerrainPerfTelemetry},
+    perf::{
+        PHASE_RENDER_NODE_TERRAIN_PASS_CPU, PHASE_RENDER_PREPARE_DEPTH_TEXTURES,
+        TerrainPerfTelemetry,
+    },
     shaders::{DEPTH_COPY_SHADER, DEPTH_COPY_SINGLE_SHADER},
 };
 use bevy::{
@@ -14,7 +17,10 @@ use bevy::{
             CachedRenderPipelinePhaseItem, DrawFunctionId, PhaseItem, PhaseItemExtraIndex,
             SortedPhaseItem, TrackedRenderPass, ViewSortedRenderPhases,
         },
-        render_resource::{binding_types::{texture_depth_2d, texture_depth_2d_multisampled}, *},
+        render_resource::{
+            binding_types::{texture_depth_2d, texture_depth_2d_multisampled},
+            *,
+        },
         renderer::{RenderContext, RenderDevice},
         sync_world::MainEntity,
         texture::{CachedTexture, TextureCache},
@@ -165,7 +171,12 @@ pub fn prepare_terrain_depth_textures(
     mut commands: Commands,
     mut texture_cache: ResMut<TextureCache>,
     device: Res<RenderDevice>,
-    views_3d: Query<(Entity, &ExtractedCamera, &Msaa, Option<&TerrainViewDepthTexture>)>,
+    views_3d: Query<(
+        Entity,
+        &ExtractedCamera,
+        &Msaa,
+        Option<&TerrainViewDepthTexture>,
+    )>,
     perf_telemetry: Res<TerrainPerfTelemetry>,
 ) {
     let start = Instant::now();
@@ -174,9 +185,9 @@ pub fn prepare_terrain_depth_textures(
             continue;
         };
 
-        if existing_depth_texture.is_some_and(|depth| {
-            depth.matches(physical_target_size, msaa.samples())
-        }) {
+        if existing_depth_texture
+            .is_some_and(|depth| depth.matches(physical_target_size, msaa.samples()))
+        {
             continue;
         }
 
@@ -197,13 +208,11 @@ pub fn prepare_terrain_depth_textures(
 
         let cached_texture = texture_cache.get(&device, descriptor);
 
-        commands
-            .entity(view)
-            .insert(TerrainViewDepthTexture::new(
-                cached_texture,
-                physical_target_size,
-                msaa.samples(),
-            ));
+        commands.entity(view).insert(TerrainViewDepthTexture::new(
+            cached_texture,
+            physical_target_size,
+            msaa.samples(),
+        ));
     }
     perf_telemetry.record_duration(PHASE_RENDER_PREPARE_DEPTH_TEXTURES, start.elapsed());
 }

@@ -1,7 +1,7 @@
 use crate::{
     math::{Coordinate, TerrainShape, TileCoordinate},
-    plugin::TerrainSettings,
     perf::{PHASE_MAIN_UPDATE_TERRAIN_VIEW_BUFFER, TerrainPerfTelemetry},
+    plugin::TerrainSettings,
     render::{TerrainViewUniform, TileTreeUniform},
     terrain::TerrainConfig,
     terrain_data::{INVALID_ATLAS_INDEX, INVALID_LOD, TileAtlas},
@@ -22,8 +22,8 @@ use bevy::{
 use big_space::prelude::*;
 use itertools::iproduct;
 use ndarray::Array4;
-use std::{cmp::Ordering, iter};
 use std::time::Instant;
+use std::{cmp::Ordering, iter};
 
 /// The current state of a tile of a [`TileTree`].
 ///

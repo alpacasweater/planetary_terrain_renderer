@@ -2,8 +2,8 @@ use bevy::app::AppExit;
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
 use bevy_terrain::math::{
-    geodesy::{ecef_to_lla_hae, ned_to_ecef, unit_from_lat_lon_degrees, LlaHae, Ned},
     Coordinate, TerrainShape,
+    geodesy::{LlaHae, Ned, ecef_to_lla_hae, ned_to_ecef, unit_from_lat_lon_degrees},
 };
 use bevy_terrain::prelude::*;
 use big_space::prelude::{FloatingOrigin, Grid};

@@ -240,7 +240,9 @@ impl From<ron::Error> for StreamingCacheManifestError {
     }
 }
 
-fn parse_ron_document<T: DeserializeOwned>(encoded: &str) -> Result<T, StreamingCacheManifestError> {
+fn parse_ron_document<T: DeserializeOwned>(
+    encoded: &str,
+) -> Result<T, StreamingCacheManifestError> {
     Ok(from_str(strip_utf8_bom(encoded))?)
 }
 

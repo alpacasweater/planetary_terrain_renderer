@@ -4,8 +4,8 @@ use crate::{
     plugin::TerrainSettings,
     render::TerrainUniform,
     streaming::{
-        CacheFirstLocalTileSource, LocalTileRequest, LocalTileSourceKind,
-        StreamingRequestPriority, StreamingTileRequest,
+        CacheFirstLocalTileSource, LocalTileRequest, LocalTileSourceKind, StreamingRequestPriority,
+        StreamingTileRequest,
     },
     terrain::{CURRENT_GEODETIC_MAPPING_VERSION, TerrainConfig, TileAvailability},
     terrain_data::{
@@ -428,13 +428,15 @@ impl TileAtlas {
             tile.requests -= 1;
             if tile.requests == 0 {
                 self.pending_stream_tiles.remove(&tile_coordinate);
-                self.to_stream.retain(|tile| tile.coordinate != tile_coordinate);
+                self.to_stream
+                    .retain(|tile| tile.coordinate != tile_coordinate);
             }
             return;
         }
 
         if !self.tile_states.contains_key(&tile_coordinate) {
-            self.to_stream.retain(|tile| tile.coordinate != tile_coordinate);
+            self.to_stream
+                .retain(|tile| tile.coordinate != tile_coordinate);
             return;
         }
 
@@ -504,11 +506,11 @@ impl TileAtlas {
                 self.to_stream.retain(|tile| tile.coordinate != coordinate);
                 self.begin_loading_requested_tile(coordinate, requests, request_sequence);
             } else {
-                self.to_stream
-                    .extend(missing_attachments.into_iter().map(|label| AttachmentTile {
-                        coordinate,
-                        label,
-                    }));
+                self.to_stream.extend(
+                    missing_attachments
+                        .into_iter()
+                        .map(|label| AttachmentTile { coordinate, label }),
+                );
             }
         }
     }
@@ -613,7 +615,10 @@ mod tests {
         terrain_data::{AttachmentConfig, AttachmentFormat},
     };
     use bevy::math::IVec2;
-    use std::{fs, time::{SystemTime, UNIX_EPOCH}};
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     fn unique_suffix() -> u128 {
         SystemTime::now()
@@ -710,8 +715,7 @@ mod tests {
         );
 
         // A single atlas slot forces the released tile's slot to be the one reused next.
-        let mut settings =
-            TerrainSettings::default().with_streaming_cache_root(cache_root.clone());
+        let mut settings = TerrainSettings::default().with_streaming_cache_root(cache_root.clone());
         settings.atlas_size = 1;
         let mut buffers = Assets::<ShaderStorageBuffer>::default();
         let mut tile_atlas = TileAtlas::new(&config, &mut buffers, &settings);

@@ -757,8 +757,14 @@ mod tests {
         let decoded = decode_dem_tiff(&bytes, "image/tiff")
             .expect("a tile with some nodata must decode, not fail wholesale");
 
-        assert!(decoded.samples[5].is_nan(), "AW3D30 -9999 must become nodata");
-        assert!(decoded.samples[10].is_nan(), "SRTM -32768 must become nodata");
+        assert!(
+            decoded.samples[5].is_nan(),
+            "AW3D30 -9999 must become nodata"
+        );
+        assert!(
+            decoded.samples[10].is_nan(),
+            "SRTM -32768 must become nodata"
+        );
         assert_eq!(decoded.samples[0], 100.0);
     }
 

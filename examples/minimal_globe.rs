@@ -340,7 +340,11 @@ fn setup(
 
     if let Ok(config) = TerrainConfig::load_file(&terrain_config_fs) {
         let effective_max_lod = options.max_lod.max(config.lod_count);
-        let imagery_status = if options.stream_online { "ON (streaming)" } else { "off (local only)" };
+        let imagery_status = if options.stream_online {
+            "ON (streaming)"
+        } else {
+            "off (local only)"
+        };
         let height_status = if options.stream_height && api_key_set {
             "ON (streaming via OpenTopography)"
         } else if options.stream_height && !api_key_set {

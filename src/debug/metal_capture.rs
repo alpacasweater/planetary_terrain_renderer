@@ -48,7 +48,10 @@ pub fn start_capture(capture: Res<FrameCapture>, device: Res<RenderDevice>) {
         .label
         .clone()
         .unwrap_or_else(|| "capture".to_string())
-        .replace(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-' && ch != '_', "_");
+        .replace(
+            |ch: char| !ch.is_ascii_alphanumeric() && ch != '-' && ch != '_',
+            "_",
+        );
 
     let capture = metal::CaptureDescriptor::new();
     capture.set_destination(metal::MTLCaptureDestination::GpuTraceDocument);

@@ -14,7 +14,6 @@ use crate::{
     terrain_data::GpuTileAtlas,
     terrain_view::TerrainViewComponents,
 };
-use std::time::Instant;
 use bevy::{
     prelude::*,
     render::{
@@ -24,6 +23,7 @@ use bevy::{
     },
     shader::ShaderDefVal,
 };
+use std::time::Instant;
 
 bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

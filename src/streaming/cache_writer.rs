@@ -1,7 +1,7 @@
 use crate::streaming::{
     CacheFreshnessPolicy, CachedTileMetadata, MaterializedStreamingTile, RegisteredStreamingSource,
-    StreamingCacheManifest, StreamingCacheManifestError,
-    cache_manifest::atomic_write_bytes, cache_paths::cache_tile_asset_path,
+    StreamingCacheManifest, StreamingCacheManifestError, cache_manifest::atomic_write_bytes,
+    cache_paths::cache_tile_asset_path,
 };
 use std::{
     error::Error,
@@ -195,8 +195,11 @@ mod tests {
         assert!(tile_fs_path.is_file());
         assert!(CachedTileMetadata::path_for_tile(&tile_fs_path).is_file());
         assert!(
-            StreamingCacheManifest::path_for(asset_root.join(cache_terrain_root(Path::new("streaming_cache"), "terrains/earth")))
-                .is_file()
+            StreamingCacheManifest::path_for(asset_root.join(cache_terrain_root(
+                Path::new("streaming_cache"),
+                "terrains/earth"
+            )))
+            .is_file()
         );
 
         fs::remove_dir_all(asset_root).unwrap();
@@ -240,7 +243,8 @@ mod tests {
                     let tile = MaterializedStreamingTile {
                         bytes: vec![thread_index as u8; 64],
                         metadata: CachedTileMetadata {
-                            format_version: crate::streaming::CURRENT_STREAMING_CACHE_FORMAT_VERSION,
+                            format_version:
+                                crate::streaming::CURRENT_STREAMING_CACHE_FORMAT_VERSION,
                             terrain_path: "terrains/earth".to_string(),
                             attachment_label: label.clone(),
                             coordinate: TileCoordinate::new(
@@ -267,10 +271,11 @@ mod tests {
             handle.join().expect("writer thread should not panic");
         }
 
-        let manifest = StreamingCacheManifest::load_file(StreamingCacheManifest::path_for(
-            asset_root.join(cache_terrain_root(Path::new("streaming_cache"), "terrains/earth")),
-        ))
-        .expect("manifest must remain valid RON under concurrent writes");
+        let manifest =
+            StreamingCacheManifest::load_file(StreamingCacheManifest::path_for(asset_root.join(
+                cache_terrain_root(Path::new("streaming_cache"), "terrains/earth"),
+            )))
+            .expect("manifest must remain valid RON under concurrent writes");
         assert_eq!(
             manifest.sources.len(),
             2,
@@ -317,10 +322,11 @@ mod tests {
         write_materialized_tile(&asset_root, &cache_root, &tile)
             .expect("writer should recreate malformed manifests");
 
-        let manifest = StreamingCacheManifest::load_file(
-            StreamingCacheManifest::path_for(asset_root.join(cache_terrain_root(Path::new("streaming_cache"), "terrains/earth"))),
-        )
-        .expect("recreated manifest should be valid RON");
+        let manifest =
+            StreamingCacheManifest::load_file(StreamingCacheManifest::path_for(asset_root.join(
+                cache_terrain_root(Path::new("streaming_cache"), "terrains/earth"),
+            )))
+            .expect("recreated manifest should be valid RON");
         assert_eq!(manifest.terrain_path, "terrains/earth");
         assert_eq!(manifest.sources.len(), 1);
 

@@ -4,7 +4,6 @@ use crate::{
     terrain::TerrainComponents,
     terrain_data::{AttachmentFormat, GpuTileAtlas},
 };
-use std::time::Instant;
 use bevy::{
     asset::{AssetServer, Handle},
     platform::collections::HashMap,
@@ -16,6 +15,7 @@ use bevy::{
     },
     shader::ShaderDefVal,
 };
+use std::time::Instant;
 use strum::IntoEnumIterator;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
