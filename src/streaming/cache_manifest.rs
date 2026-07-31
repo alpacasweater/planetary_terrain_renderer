@@ -6,9 +6,41 @@ use std::{
     error::Error,
     fmt, fs,
     path::{Path, PathBuf},
+    process,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 pub const CURRENT_STREAMING_CACHE_FORMAT_VERSION: u32 = 1;
+
+static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Writes `bytes` to `final_path` atomically: a uniquely-named temp file in the same
+/// directory is written and fsync-free-renamed into place, so a concurrent reader (the main
+/// thread polls `is_file`) never observes a half-written cache file. Concurrent writers to the
+/// same final path resolve to a last-writer-wins full file rather than an interleaved,
+/// malformed one.
+pub(crate) fn atomic_write_bytes(final_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = final_path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+
+    let file_name = final_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("cache");
+    let unique = ATOMIC_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp_path = parent.join(format!(".{file_name}.tmp-{}-{unique}", process::id()));
+
+    // Best-effort: if writing or renaming fails, remove the temp file so we don't leak it.
+    if let Err(error) = fs::write(&temp_path, bytes) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
+    if let Err(error) = fs::rename(&temp_path, final_path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
+    Ok(())
+}
 pub const STREAMING_CACHE_MANIFEST_FILE_NAME: &str = "streaming_cache_manifest.ron";
 pub const STREAMING_TILE_METADATA_EXTENSION: &str = "tile-cache.ron";
 
@@ -84,7 +116,7 @@ impl StreamingCacheManifest {
 
     pub fn save_file<P: AsRef<Path>>(&self, path: P) -> Result<(), StreamingCacheManifestError> {
         let encoded = to_string_pretty(self, Default::default())?;
-        fs::write(path, encoded)?;
+        atomic_write_bytes(path.as_ref(), encoded.as_bytes())?;
         Ok(())
     }
 
@@ -131,7 +163,7 @@ impl CachedTileMetadata {
 
     pub fn save_file<P: AsRef<Path>>(&self, path: P) -> Result<(), StreamingCacheManifestError> {
         let encoded = to_string_pretty(self, Default::default())?;
-        fs::write(path, encoded)?;
+        atomic_write_bytes(path.as_ref(), encoded.as_bytes())?;
         Ok(())
     }
 

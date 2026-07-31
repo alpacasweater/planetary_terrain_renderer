@@ -1,12 +1,19 @@
 use crate::streaming::{
     CacheFreshnessPolicy, CachedTileMetadata, MaterializedStreamingTile, RegisteredStreamingSource,
-    StreamingCacheManifest, StreamingCacheManifestError, cache_paths::cache_tile_asset_path,
+    StreamingCacheManifest, StreamingCacheManifestError,
+    cache_manifest::atomic_write_bytes, cache_paths::cache_tile_asset_path,
 };
 use std::{
     error::Error,
     fmt, fs,
     path::{Path, PathBuf},
+    sync::Mutex,
 };
+
+/// Serializes the manifest read-modify-write across concurrent streaming tasks. Manifest
+/// updates are rare (once per newly-seen source per terrain), so a single process-wide lock is
+/// cheap and prevents the lost-update / torn-file races that produced malformed manifests.
+static MANIFEST_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug)]
 pub enum StreamingCacheWriteError {
@@ -57,7 +64,9 @@ pub fn write_materialized_tile(
         fs::create_dir_all(parent)?;
     }
 
-    fs::write(&tile_fs_path, &tile.bytes)?;
+    // Write the tile and its sidecar atomically (temp + rename) so the main thread, which polls
+    // for the final path with is_file, never loads a half-written tile.
+    atomic_write_bytes(&tile_fs_path, &tile.bytes)?;
 
     let sidecar_path = CachedTileMetadata::path_for_tile(&tile_fs_path);
     tile.metadata.save_file(&sidecar_path)?;
@@ -71,6 +80,13 @@ fn ensure_registered_source(
     cache_root: &Path,
     metadata: &CachedTileMetadata,
 ) -> Result<(), StreamingCacheWriteError> {
+    // Serialize the whole read-modify-write so concurrent tasks cannot lose each other's source
+    // registrations or observe a torn manifest. A poisoned lock still lets us proceed -- the
+    // manifest write itself is atomic, so a panic mid-update cannot have corrupted the file.
+    let _guard = MANIFEST_WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
     let terrain_root = asset_root.join(cache_terrain_root(cache_root, &metadata.terrain_path));
     fs::create_dir_all(&terrain_root)?;
     let manifest_path = StreamingCacheManifest::path_for(&terrain_root);
@@ -184,6 +200,84 @@ mod tests {
         );
 
         fs::remove_dir_all(asset_root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_writes_keep_manifest_valid_and_register_all_sources() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let asset_root = Arc::new(unique_temp_dir());
+        let cache_root = Arc::new(PathBuf::from("streaming_cache"));
+
+        let mut handles = Vec::new();
+        for thread_index in 0..8_u32 {
+            let asset_root = Arc::clone(&asset_root);
+            let cache_root = Arc::clone(&cache_root);
+            handles.push(thread::spawn(move || {
+                let is_height = thread_index % 2 == 0;
+                let (label, source) = if is_height {
+                    (
+                        AttachmentLabel::Height,
+                        StreamingSourceDescriptor {
+                            source_id: "opentopography/aw3d30_e".to_string(),
+                            source_kind: StreamingSourceKind::OpenTopography,
+                            attachment_kind: crate::streaming::StreamedAttachmentKind::Height,
+                        },
+                    )
+                } else {
+                    (
+                        AttachmentLabel::Custom("albedo".to_string()),
+                        StreamingSourceDescriptor {
+                            source_id: "nasa_gibs/modis_true_color".to_string(),
+                            source_kind: StreamingSourceKind::NasaGibs,
+                            attachment_kind: crate::streaming::StreamedAttachmentKind::Imagery,
+                        },
+                    )
+                };
+
+                for tile_index in 0..16_u32 {
+                    let tile = MaterializedStreamingTile {
+                        bytes: vec![thread_index as u8; 64],
+                        metadata: CachedTileMetadata {
+                            format_version: crate::streaming::CURRENT_STREAMING_CACHE_FORMAT_VERSION,
+                            terrain_path: "terrains/earth".to_string(),
+                            attachment_label: label.clone(),
+                            coordinate: TileCoordinate::new(
+                                thread_index % 6,
+                                3,
+                                IVec2::new(tile_index as i32, thread_index as i32),
+                            ),
+                            source: source.clone(),
+                            fetched_at_unix_ms: 1,
+                            expires_at_unix_ms: None,
+                            source_zoom: None,
+                            source_revision: None,
+                            source_content_hash: None,
+                            source_crs: None,
+                            encoding: CacheTileEncoding::Tiff,
+                        },
+                    };
+                    write_materialized_tile(&asset_root, &cache_root, &tile)
+                        .expect("concurrent cache writes should succeed");
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("writer thread should not panic");
+        }
+
+        let manifest = StreamingCacheManifest::load_file(StreamingCacheManifest::path_for(
+            asset_root.join("streaming_cache/terrains/earth"),
+        ))
+        .expect("manifest must remain valid RON under concurrent writes");
+        assert_eq!(
+            manifest.sources.len(),
+            2,
+            "both distinct sources should survive the concurrent read-modify-write"
+        );
+
+        fs::remove_dir_all(&*asset_root).unwrap();
     }
 
     #[test]
