@@ -98,7 +98,7 @@ impl DefaultLoader {
                 false
             } else if asset_server.load_state(tile.handle.id()).is_failed() {
                 atlas.tile_failed(tile.tile.clone());
-                return false;
+                false
             } else {
                 true
             }

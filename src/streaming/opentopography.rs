@@ -52,8 +52,7 @@ fn is_nodata_sample(value: f32) -> bool {
     !value.is_finite()
         || value == SRTM_VOID_SENTINEL_M
         || value == AW3D30_NODATA_SENTINEL_M
-        || value < PLAUSIBLE_EARTH_MIN_HEIGHT_M
-        || value > PLAUSIBLE_EARTH_MAX_HEIGHT_M
+        || !(PLAUSIBLE_EARTH_MIN_HEIGHT_M..=PLAUSIBLE_EARTH_MAX_HEIGHT_M).contains(&value)
 }
 
 /// Geoid undulation N (metres) at `(lat, lon)`; `HAE = orthometric_MSL + N`. Latitude is clamped
@@ -131,17 +130,9 @@ impl OpenTopographyGlobalDemRequest {
     }
 }
 
-#[derive(Clone, Debug, Resource)]
+#[derive(Clone, Debug, Resource, Default)]
 pub struct OpenTopographyHeightProvider {
     config: OpenTopographyHeightConfig,
-}
-
-impl Default for OpenTopographyHeightProvider {
-    fn default() -> Self {
-        Self {
-            config: OpenTopographyHeightConfig::default(),
-        }
-    }
 }
 
 impl OpenTopographyHeightProvider {
@@ -464,8 +455,7 @@ fn response_looks_like_text_document(body: &[u8]) -> bool {
 
 fn response_preview(body: &[u8]) -> String {
     String::from_utf8_lossy(&body[..body.len().min(160)])
-        .replace('\n', " ")
-        .replace('\r', " ")
+        .replace(['\n', '\r'], " ")
         .chars()
         .take(160)
         .collect()

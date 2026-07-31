@@ -5,6 +5,33 @@ on:
   pull_request:
 
 jobs:
+  lint-and-test:
+    name: Lint and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Linux render dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwayland-dev libxkbcommon-dev libx11-dev libasound2-dev libudev-dev
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy -p bevy_terrain --lib --tests -- -D warnings
+
+      - name: Test
+        run: cargo test -p bevy_terrain
+
   render-examples:
     name: Render Examples (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -19,6 +46,13 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux render dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwayland-dev libxkbcommon-dev libx11-dev libasound2-dev libudev-dev
 
       - name: Check render crate
         run: cargo check -p bevy_terrain

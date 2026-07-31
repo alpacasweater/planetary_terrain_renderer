@@ -90,7 +90,7 @@ impl Default for OrbitalCameraController {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::unnecessary_unwrap)]
 pub fn orbital_camera_controller(
     mut gizmos: Gizmos,
     grids: Grids,

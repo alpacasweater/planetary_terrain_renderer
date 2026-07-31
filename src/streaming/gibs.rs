@@ -111,17 +111,9 @@ impl GibsGetMapRequest {
     }
 }
 
-#[derive(Clone, Debug, Resource)]
+#[derive(Clone, Debug, Resource, Default)]
 pub struct NasaGibsImageryProvider {
     config: NasaGibsImageryConfig,
-}
-
-impl Default for NasaGibsImageryProvider {
-    fn default() -> Self {
-        Self {
-            config: NasaGibsImageryConfig::default(),
-        }
-    }
 }
 
 impl NasaGibsImageryProvider {
@@ -260,16 +252,16 @@ fn materialize_tile_with_config(
     };
 
     let target_rgb = remap_source_to_tile(&source_image, request, planned.bbox_lon_lat)?;
-    if imagery_looks_like_blank_fill(&target_rgb) {
-        if let Some(fallback) = &config.fallback {
-            bevy::log::debug!(
-                "Imagery source {} produced a near-blank tile for {:?}; retrying with fallback {}",
-                config.source_id,
-                request.coordinate,
-                fallback.source_id,
-            );
-            return materialize_tile_with_config(fallback, request);
-        }
+    if imagery_looks_like_blank_fill(&target_rgb)
+        && let Some(fallback) = &config.fallback
+    {
+        bevy::log::debug!(
+            "Imagery source {} produced a near-blank tile for {:?}; retrying with fallback {}",
+            config.source_id,
+            request.coordinate,
+            fallback.source_id,
+        );
+        return materialize_tile_with_config(fallback, request);
     }
 
     let encoded_tile = encode_rgb_tiff(
@@ -345,8 +337,7 @@ fn response_looks_like_error_document(body: &[u8]) -> bool {
 
 fn response_preview(body: &[u8]) -> String {
     String::from_utf8_lossy(&body[..body.len().min(160)])
-        .replace('\n', " ")
-        .replace('\r', " ")
+        .replace(['\n', '\r'], " ")
         .chars()
         .take(160)
         .collect()

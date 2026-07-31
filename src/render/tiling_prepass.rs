@@ -301,6 +301,7 @@ impl render_graph::Node for TilingPrepass {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn queue_tiling_prepass(
     debug: Option<Res<DebugTerrain>>,
     pipeline_cache: Res<PipelineCache>,

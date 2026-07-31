@@ -278,11 +278,7 @@ impl StreamingRequestQueue {
     }
 
     pub fn dequeue_batch(&mut self, limit: usize) -> Vec<QueuedStreamingRequest> {
-        let mut queued = self
-            .pending
-            .drain()
-            .map(|(key, request)| (key, request))
-            .collect::<Vec<_>>();
+        let mut queued = self.pending.drain().collect::<Vec<_>>();
         queued.sort_by_key(|(_, request)| {
             Reverse(request_priority(
                 request.priority_class,
@@ -428,7 +424,6 @@ pub fn start_streaming_jobs(
         let cache_root = cache_root.clone();
         let gibs = gibs.clone();
         let opentopography = opentopography.clone();
-        let stream_height = stream_height;
         let asset_root = asset_root.clone();
         worker.stats.started_total += 1;
 

@@ -191,10 +191,10 @@ impl CachedTileMetadata {
             }
         }
 
-        if let Some(expires_at_unix_ms) = self.expires_at_unix_ms {
-            if now_unix_ms > expires_at_unix_ms {
-                return false;
-            }
+        if let Some(expires_at_unix_ms) = self.expires_at_unix_ms
+            && now_unix_ms > expires_at_unix_ms
+        {
+            return false;
         }
 
         true
