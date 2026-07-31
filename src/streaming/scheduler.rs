@@ -414,7 +414,7 @@ pub fn start_streaming_jobs(
     let gibs = gibs.clone();
     let opentopography = opentopography.clone();
     let stream_height = settings.stream_height;
-    let asset_root = PathBuf::from("assets");
+    let asset_root = terrain_settings.asset_root.clone();
     let queued = queue.dequeue_batch(available_slots);
 
     for queued_request in queued {

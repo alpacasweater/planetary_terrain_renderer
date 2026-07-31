@@ -32,12 +32,18 @@ use bevy::{
 };
 use bevy_common_assets::ron::RonAssetPlugin;
 use big_space::prelude::*;
+use std::path::PathBuf;
 
 #[derive(Resource)]
 pub struct TerrainSettings {
     pub attachments: Vec<AttachmentLabel>,
     pub atlas_size: u32,
     pub upload_budget_bytes_per_frame: usize,
+    /// Filesystem root that Bevy's `AssetServer` resolves asset paths against (Bevy's default is
+    /// `assets`). Tile loading and the streaming cache resolve/write under this root, so it must
+    /// match Bevy's `AssetPlugin` configuration for non-default asset roots, packaged assets, or
+    /// launches from a directory other than the crate root.
+    pub asset_root: PathBuf,
     pub streaming_cache_root: Option<String>,
     pub streaming_target_lod_count: Option<u32>,
 }
@@ -48,6 +54,7 @@ impl Default for TerrainSettings {
             attachments: vec![AttachmentLabel::Height],
             atlas_size: 1028,
             upload_budget_bytes_per_frame: 24 * 1024 * 1024,
+            asset_root: PathBuf::from("assets"),
             streaming_cache_root: None,
             streaming_target_lod_count: None,
         }
@@ -72,9 +79,17 @@ impl TerrainSettings {
             attachments,
             atlas_size: 1028,
             upload_budget_bytes_per_frame: 24 * 1024 * 1024,
+            asset_root: PathBuf::from("assets"),
             streaming_cache_root: None,
             streaming_target_lod_count: None,
         }
+    }
+
+    /// Set the filesystem root Bevy resolves assets against (default `assets`). Use this when the
+    /// app configures a non-default Bevy `AssetPlugin` root or is launched from another directory.
+    pub fn with_asset_root<P: Into<PathBuf>>(mut self, asset_root: P) -> Self {
+        self.asset_root = asset_root.into();
+        self
     }
 
     /// Stream height plus a single custom attachment.

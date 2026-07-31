@@ -115,7 +115,7 @@ impl DefaultLoader {
         self.cancel_stale(atlas);
         let mut inflight_counts = self.inflight_counts();
         let tile_source = CacheFirstLocalTileSource::new(
-            std::path::PathBuf::from("assets"),
+            settings.asset_root.clone(),
             settings
                 .streaming_cache_root
                 .as_deref()

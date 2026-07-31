@@ -100,6 +100,7 @@ pub struct TileAtlas {
     explicit_tiles: HashSet<TileCoordinate>,
     tile_availability: TileAvailability,
     terrain_path: String,
+    asset_root: PathBuf,
     streaming_cache_root: Option<PathBuf>,
     pub(crate) uploading_tiles: Vec<AttachmentTileWithData>,
     pub(crate) downloading_tiles: Vec<Task<AttachmentTileWithData>>,
@@ -257,6 +258,7 @@ impl TileAtlas {
             explicit_tiles: HashSet::from_iter(config.tiles.clone()),
             tile_availability: config.tile_availability,
             terrain_path,
+            asset_root: settings.asset_root.clone(),
             streaming_cache_root: settings.streaming_cache_root.as_ref().map(PathBuf::from),
             to_load: default(),
             to_stream: default(),
@@ -472,7 +474,7 @@ impl TileAtlas {
 
     fn missing_local_attachments(&self, tile_coordinate: TileCoordinate) -> Vec<AttachmentLabel> {
         let tile_source = CacheFirstLocalTileSource::new(
-            PathBuf::from("assets"),
+            self.asset_root.clone(),
             self.streaming_cache_root.clone(),
         );
 
@@ -680,6 +682,65 @@ mod tests {
         assert_eq!(tile_atlas.to_load[0].label, AttachmentLabel::Height);
 
         let _ = fs::remove_dir_all(PathBuf::from("assets").join(cache_root));
+    }
+
+    #[test]
+    fn tile_atlas_resolves_tiles_under_a_custom_asset_root() {
+        let unique = unique_suffix();
+        let asset_root = std::env::temp_dir().join(format!("terrain_asset_root_{unique}"));
+        let terrain_path = format!("terrains/test_asset_root_{unique}");
+        let cache_root = format!("streaming_cache_test_{unique}");
+        let coordinate = TileCoordinate::new(0, 0, IVec2::new(0, 0));
+
+        let mut config = TerrainConfig {
+            path: terrain_path,
+            shape: TerrainShape::WGS84,
+            lod_count: 1,
+            min_height: 0.0,
+            max_height: 1.0,
+            tile_availability: TileAvailability::FullFace,
+            ..Default::default()
+        };
+        config.add_attachment(
+            AttachmentLabel::Height,
+            AttachmentConfig {
+                texture_size: 4,
+                border_size: 0,
+                mip_level_count: 1,
+                mask: false,
+                format: AttachmentFormat::R32F,
+            },
+        );
+
+        let settings = TerrainSettings::default()
+            .with_streaming_cache_root(cache_root.clone())
+            .with_asset_root(asset_root.clone());
+        let mut buffers = Assets::<ShaderStorageBuffer>::default();
+        let mut tile_atlas = TileAtlas::new(&config, &mut buffers, &settings);
+
+        // Nothing exists under the custom root yet, so the tile parks pending.
+        tile_atlas.request_tile(coordinate);
+        assert!(tile_atlas.pending_stream_tiles.contains_key(&coordinate));
+
+        // Writing the tile under the CUSTOM asset root (not "assets") must satisfy the lookup.
+        let tile_path = cache_tile_asset_path(
+            PathBuf::from(&cache_root).as_path(),
+            &tile_atlas.terrain_path,
+            &AttachmentLabel::Height,
+            coordinate,
+        );
+        let tile_fs_path = asset_root.join(tile_path);
+        fs::create_dir_all(tile_fs_path.parent().unwrap()).unwrap();
+        fs::write(&tile_fs_path, b"height").unwrap();
+
+        tile_atlas.refresh_pending_stream_tiles();
+        assert!(
+            !tile_atlas.pending_stream_tiles.contains_key(&coordinate),
+            "a tile present under the configured asset root should promote"
+        );
+        assert!(tile_atlas.tile_states.contains_key(&coordinate));
+
+        let _ = fs::remove_dir_all(&asset_root);
     }
 
     #[test]
