@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 
 pub const CURRENT_TERRAIN_FORMAT_VERSION: u32 = 2;
-pub const CURRENT_GEODETIC_MAPPING_VERSION: u32 = 2;
+// v3: streamed/ingested heights are ellipsoidal (HAE), converted from EGM96-orthometric DEM
+// sources at ingest. v2 configs predate the vertical-datum fix and are ~+-100 m off.
+pub const CURRENT_GEODETIC_MAPPING_VERSION: u32 = 3;
 
 const fn legacy_terrain_format_version() -> u32 {
     1

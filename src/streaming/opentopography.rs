@@ -9,6 +9,7 @@ use crate::{
     terrain_data::AttachmentFormat,
 };
 use bevy::prelude::Resource;
+use small_world::egm96::EGM96;
 use std::{
     env,
     io::{Cursor, Read},
@@ -27,6 +28,42 @@ const MAX_REQUEST_AREA_30M_SQ_KM: f64 = 450_000.0;
 const MAX_REQUEST_AREA_90M_SQ_KM: f64 = 4_050_000.0;
 const PLAUSIBLE_EARTH_MIN_HEIGHT_M: f32 = -20_000.0;
 const PLAUSIBLE_EARTH_MAX_HEIGHT_M: f32 = 20_000.0;
+
+/// SRTM void sentinel (`-32768`) and AW3D30/ALOS nodata sentinel (`-9999`). SRTM voids fall
+/// outside the plausible range, but AW3D30's `-9999` sits inside it and was previously cached as
+/// a genuine -9999 m trench -- these must be recognised as nodata, not elevation.
+const SRTM_VOID_SENTINEL_M: f32 = -32768.0;
+const AW3D30_NODATA_SENTINEL_M: f32 = -9999.0;
+
+/// EGM96 geoid grid embedded at build time so streaming worker threads can convert orthometric
+/// DEM heights to ellipsoidal without a runtime file path. Provided by `small_world`, the single
+/// source of truth for the geoid (see docs/reference_frames.md).
+const EGM96_GRID_BYTES: &[u8] = include_bytes!("../../data/egm96/WW15MGH.DAC");
+
+thread_local! {
+    /// Per-worker-thread geoid, parsed once from the embedded grid. `EGM96` is not `Sync`, so a
+    /// thread-local avoids re-parsing the 2 MB grid on every tile while never sharing it.
+    static EGM96_GEOID: EGM96 =
+        EGM96::from_bytes(EGM96_GRID_BYTES).expect("embedded EGM96 grid must parse");
+}
+
+/// True for samples that are DEM nodata/voids rather than real elevations.
+fn is_nodata_sample(value: f32) -> bool {
+    !value.is_finite()
+        || value == SRTM_VOID_SENTINEL_M
+        || value == AW3D30_NODATA_SENTINEL_M
+        || value < PLAUSIBLE_EARTH_MIN_HEIGHT_M
+        || value > PLAUSIBLE_EARTH_MAX_HEIGHT_M
+}
+
+/// Geoid undulation N (metres) at `(lat, lon)`; `HAE = orthometric_MSL + N`. Latitude is clamped
+/// into range for tiles that graze the poles, and any lookup failure degrades to `0.0` (treating
+/// the sample as already ellipsoidal) rather than failing the tile.
+fn geoid_undulation_m(geoid: &EGM96, lat_deg: f64, lon_deg: f64) -> f64 {
+    geoid
+        .offset_bilinear(lat_deg.clamp(-90.0, 90.0), lon_deg)
+        .unwrap_or(0.0)
+}
 const OPENTOPOGRAPHY_MAX_DECODING_BUFFER_BYTES: usize = 1024 * 1024 * 1024;
 const OPENTOPOGRAPHY_MAX_INTERMEDIATE_BUFFER_BYTES: usize = 512 * 1024 * 1024;
 const OPENTOPOGRAPHY_MAX_IFD_VALUE_BYTES: usize = 8 * 1024 * 1024;
@@ -186,7 +223,9 @@ impl StreamingTileProvider for OpenTopographyHeightProvider {
             })?;
 
         let source_dem = decode_dem_tiff(&body, &content_type)?;
-        let target_heights = remap_source_to_tile(&source_dem, request, planned.bbox_lon_lat)?;
+        let target_heights = EGM96_GEOID.with(|geoid| {
+            remap_source_to_tile(&source_dem, request, planned.bbox_lon_lat, geoid)
+        })?;
         let encoded_tile = encode_height_tiff(
             request.attachment_config.texture_size,
             request.attachment_config.texture_size,
@@ -310,7 +349,7 @@ fn decode_dem_tiff_with_limits(
         ))
     })?;
 
-    let samples = match decoder.read_image().map_err(|error| {
+    let mut samples = match decoder.read_image().map_err(|error| {
         StreamingProviderError::Permanent(format!(
             "failed to decode OpenTopography TIFF body (content_type='{content_type}'): {error}"
         ))
@@ -341,13 +380,21 @@ fn decode_dem_tiff_with_limits(
         )));
     }
 
-    if samples.iter().any(|value| {
-        !value.is_finite()
-            || *value < PLAUSIBLE_EARTH_MIN_HEIGHT_M
-            || *value > PLAUSIBLE_EARTH_MAX_HEIGHT_M
-    }) {
+    // Map nodata/void sentinels and out-of-range garbage to NaN per sample instead of rejecting
+    // the whole tile. A single SRTM ocean void (-32768) used to fail an entire coastal tile
+    // (then retry forever); AW3D30's -9999 used to pass the plausibility gate and be cached as a
+    // -9999 m trench. Downstream resampling is nodata-aware and fills the gaps at ingest.
+    let mut nodata_count = 0usize;
+    for value in &mut samples {
+        if is_nodata_sample(*value) {
+            *value = f32::NAN;
+            nodata_count += 1;
+        }
+    }
+
+    if nodata_count == samples.len() {
         return Err(StreamingProviderError::Unavailable(
-            "OpenTopography DEM response contained invalid or out-of-range elevations".to_string(),
+            "OpenTopography DEM response was entirely nodata".to_string(),
         ));
     }
 
@@ -442,6 +489,7 @@ fn remap_source_to_tile(
     source_dem: &DecodedDem,
     request: &StreamingTileRequest,
     bbox_lon_lat: [f64; 4],
+    geoid: &EGM96,
 ) -> Result<Vec<f32>, StreamingProviderError> {
     if source_dem.width == 0 || source_dem.height == 0 {
         return Err(StreamingProviderError::Permanent(
@@ -472,13 +520,24 @@ fn remap_source_to_tile(
             };
 
             let sample = bilinear_sample_f32(source_dem, u.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
-            remapped.push(sample);
+
+            // OpenTopography SRTM/AW3D30/NASADEM heights are EGM96-orthometric (~MSL). Cache tiles
+            // store ellipsoidal (HAE) heights so the render path never needs a geoid lookup, so
+            // convert here: HAE = orthometric + N. Nodata samples (NaN) are filled at sea level
+            // (orthometric 0 -> HAE = N), which is correct over ocean voids and a neutral fill
+            // elsewhere. See docs/reference_frames.md.
+            let undulation_m = geoid_undulation_m(geoid, lat_deg, lon_deg) as f32;
+            let orthometric_m = if sample.is_finite() { sample } else { 0.0 };
+            remapped.push(orthometric_m + undulation_m);
         }
     }
 
     Ok(remapped)
 }
 
+/// Nodata-aware bilinear sample: neighbours that are NaN (mapped from DEM voids) are dropped from
+/// the weighted average so a valid pixel next to a void is not contaminated. Returns NaN only
+/// when all four neighbours are nodata.
 fn bilinear_sample_f32(dem: &DecodedDem, u: f64, v: f64) -> f32 {
     let width = dem.width.saturating_sub(1) as f64;
     let height = dem.height.saturating_sub(1) as f64;
@@ -497,9 +556,27 @@ fn bilinear_sample_f32(dem: &DecodedDem, u: f64, v: f64) -> f32 {
     let bottom_left = dem.samples[(y1 * dem.width + x0) as usize];
     let bottom_right = dem.samples[(y1 * dem.width + x1) as usize];
 
-    let top = top_left * (1.0 - tx) + top_right * tx;
-    let bottom = bottom_left * (1.0 - tx) + bottom_right * tx;
-    top * (1.0 - ty) + bottom * ty
+    let weighted = [
+        (top_left, (1.0 - tx) * (1.0 - ty)),
+        (top_right, tx * (1.0 - ty)),
+        (bottom_left, (1.0 - tx) * ty),
+        (bottom_right, tx * ty),
+    ];
+
+    let mut value_sum = 0.0;
+    let mut weight_sum = 0.0;
+    for (value, weight) in weighted {
+        if value.is_finite() {
+            value_sum += value * weight;
+            weight_sum += weight;
+        }
+    }
+
+    if weight_sum > 0.0 {
+        value_sum / weight_sum
+    } else {
+        f32::NAN
+    }
 }
 
 fn encode_height_tiff(
@@ -668,6 +745,85 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("450000 km^2"));
         assert!(message.contains("covers about"));
+    }
+
+    #[test]
+    fn decode_maps_nodata_sentinels_to_nan_without_failing_the_tile() {
+        let mut samples = vec![100.0_f32; 16];
+        samples[5] = AW3D30_NODATA_SENTINEL_M;
+        samples[10] = SRTM_VOID_SENTINEL_M;
+        let bytes = encode_height_tiff(4, 4, &samples).expect("fixture TIFF should encode");
+
+        let decoded = decode_dem_tiff(&bytes, "image/tiff")
+            .expect("a tile with some nodata must decode, not fail wholesale");
+
+        assert!(decoded.samples[5].is_nan(), "AW3D30 -9999 must become nodata");
+        assert!(decoded.samples[10].is_nan(), "SRTM -32768 must become nodata");
+        assert_eq!(decoded.samples[0], 100.0);
+    }
+
+    #[test]
+    fn remap_converts_orthometric_heights_to_ellipsoidal() {
+        let request = height_request(TileCoordinate::new(0, 6, IVec2::new(20, 18)));
+        let bbox = request_lon_lat_bbox(&request).unwrap();
+        let source = DecodedDem {
+            width: 8,
+            height: 8,
+            samples: vec![100.0_f32; 64],
+        };
+        let geoid = EGM96::from_bytes(EGM96_GRID_BYTES).unwrap();
+
+        let out = remap_source_to_tile(&source, &request, bbox, &geoid).unwrap();
+
+        let size = request.attachment_config.texture_size;
+        let mut max_offset_m = 0.0_f32;
+        for y in 0..size {
+            for x in 0..size {
+                let (lat, lon) =
+                    texture_sample_coordinate(&request, x as f64, y as f64).lat_lon_degrees();
+                let n = geoid_undulation_m(&geoid, lat, lon) as f32;
+                let value = out[(y * size + x) as usize];
+                assert!(
+                    (value - (100.0 + n)).abs() < 1e-3,
+                    "ellipsoidal height at ({x},{y}) = {value}, expected {} (100 orthometric + {n} undulation)",
+                    100.0 + n
+                );
+                max_offset_m = max_offset_m.max((value - 100.0).abs());
+            }
+        }
+        // The datum conversion actually moves the heights: this tile is nowhere near a
+        // zero-undulation contour, so the applied offset is metres, not noise.
+        assert!(
+            max_offset_m > 1.0,
+            "expected a non-trivial geoid offset across the tile, got {max_offset_m} m"
+        );
+    }
+
+    #[test]
+    fn remap_fills_nodata_at_sea_level() {
+        let request = height_request(TileCoordinate::new(0, 6, IVec2::new(20, 18)));
+        let bbox = request_lon_lat_bbox(&request).unwrap();
+        let source = DecodedDem {
+            width: 8,
+            height: 8,
+            samples: vec![f32::NAN; 64],
+        };
+        let geoid = EGM96::from_bytes(EGM96_GRID_BYTES).unwrap();
+
+        let out = remap_source_to_tile(&source, &request, bbox, &geoid).unwrap();
+
+        let size = request.attachment_config.texture_size;
+        for y in 0..size {
+            for x in 0..size {
+                let (lat, lon) =
+                    texture_sample_coordinate(&request, x as f64, y as f64).lat_lon_degrees();
+                let n = geoid_undulation_m(&geoid, lat, lon) as f32;
+                let value = out[(y * size + x) as usize];
+                // Nodata -> orthometric 0 (sea level) -> HAE = N. Never a -9999 m trench.
+                assert!(value.is_finite());
+                assert!((value - n).abs() < 1e-3);
+            }
+        }
     }
 
     #[test]

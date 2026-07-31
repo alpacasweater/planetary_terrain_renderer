@@ -10,7 +10,10 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-pub const CURRENT_STREAMING_CACHE_FORMAT_VERSION: u32 = 1;
+// v2: streamed height tiles are stored ellipsoidal (HAE) rather than orthometric. Cached tiles
+// live under a per-version subdirectory (see cache_paths::versioned_cache_root), so v1 tiles
+// written before the datum fix are never mixed with v2 tiles.
+pub const CURRENT_STREAMING_CACHE_FORMAT_VERSION: u32 = 2;
 
 static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 

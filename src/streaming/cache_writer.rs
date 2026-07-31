@@ -45,7 +45,7 @@ impl From<StreamingCacheManifestError> for StreamingCacheWriteError {
 }
 
 pub fn cache_terrain_root(cache_root: &Path, terrain_path: &str) -> PathBuf {
-    cache_root.join(terrain_path)
+    crate::streaming::cache_paths::versioned_cache_root(cache_root).join(terrain_path)
 }
 
 pub fn write_materialized_tile(
@@ -195,7 +195,7 @@ mod tests {
         assert!(tile_fs_path.is_file());
         assert!(CachedTileMetadata::path_for_tile(&tile_fs_path).is_file());
         assert!(
-            StreamingCacheManifest::path_for(asset_root.join("streaming_cache/terrains/earth"))
+            StreamingCacheManifest::path_for(asset_root.join(cache_terrain_root(Path::new("streaming_cache"), "terrains/earth")))
                 .is_file()
         );
 
@@ -268,7 +268,7 @@ mod tests {
         }
 
         let manifest = StreamingCacheManifest::load_file(StreamingCacheManifest::path_for(
-            asset_root.join("streaming_cache/terrains/earth"),
+            asset_root.join(cache_terrain_root(Path::new("streaming_cache"), "terrains/earth")),
         ))
         .expect("manifest must remain valid RON under concurrent writes");
         assert_eq!(
@@ -318,7 +318,7 @@ mod tests {
             .expect("writer should recreate malformed manifests");
 
         let manifest = StreamingCacheManifest::load_file(
-            StreamingCacheManifest::path_for(asset_root.join("streaming_cache/terrains/earth")),
+            StreamingCacheManifest::path_for(asset_root.join(cache_terrain_root(Path::new("streaming_cache"), "terrains/earth"))),
         )
         .expect("recreated manifest should be valid RON");
         assert_eq!(manifest.terrain_path, "terrains/earth");
