@@ -160,20 +160,32 @@ Disposition options:
 1. **Short-term (unblock builds):** feature-gate the oracle tests (e.g. `#[cfg(feature = "small_world_oracle")]`
    with the dep behind the same optional feature) or replace the oracle with hardcoded expected values captured
    once from `small_world`. Keeps the 4 self-contained round-trip tests running for everyone.
-2. **Replacement candidates (open source), if `small_world` is to be replaced:**
-   - `nav-types` crate — LLA/ECEF/NED/ENU on WGS84; covers the frame conversions but is **HAE-only** (no geoid).
-   - `map_3d` crate — port of MATLAB/matmap3d geodetic conversions; similar coverage, HAE-only.
-   - Rust Geodesy (`geodesy` crate) — PROJ-like operator pipelines; more capable, more ceremony.
-   - `proj` crate (PROJ bindings) — the only drop-in path to **proper vertical datum transforms** (EGM96/EGM2008
-     geoid grids, `+geoidgrids`), at the cost of a C dependency incompatible with wasm.
-   - A small embedded EGM96 undulation model (spherical-harmonic or gridded, e.g. an `egm96`-style crate) layered on
-     top of `geodesy.rs`/`nav-types` — lightest way to get HAE↔MSL without PROJ.
-   Verify current crate status before adopting; none of the pure-Rust frame libraries handle the geoid, so the
-   realistic decision is: keep `geodesy.rs` (verified correct for frames) + add a geoid undulation source, or adopt
-   PROJ. AGL should be answered by the renderer itself (terrain height query at the agent's footprint), not a
-   geodesy library.
+2. **Recommended replacement stack (empirically verified 2026-07-30, all-Rust, wasm-compatible, no PROJ):**
+   - **Frames** (LLA-HAE ↔ ECEF ↔ NED/ENU): keep the fork's own `geodesy.rs` — already verified correct
+     (round-trips at ~1e-13° / 8e-8 m). Alternatives (`nav-types`, `map_3d`) add nothing; both are HAE-only too.
+   - **HAE ↔ MSL**: the **`egm96` crate v0.2.3** (Zlib license, micahcc/egm96-rs). Validated in-sandbox against
+     NGA reference undulations:
+     | Location | Reference | SH eval | 5′ raster |
+     | --- | --- | --- | --- |
+     | (0°, 0°) | +17.16 m | 17.162 | 17.150 |
+     | Everest (27.9881°N, 86.925°E) | −28.74 m | −28.741 | −29.305 |
+     | Indian Ocean low (4.75°N, 78.75°E) | ≈−107 m | −106.991 | −107.012 |
+     Spherical-harmonic path matches to millimeters at ~0.7 ms/call; the embedded 5′ raster is within ~0.5 m even
+     in the worst geoid terrain at ~1 µs/lookup (negligible vs SRTM's ~16 m LE90). Data cost: 1.3 MB (15′ grid)
+     or 8 MB (5′ grid) PNG.
+     **Adoption caveat:** the crate's default `fetch-maps` feature downloads the grid PNGs from the author's
+     personal GitHub Pages *at build time* — a supply-chain/CI-reproducibility hazard. Use
+     `default-features = false, features = ["raster_5_min"]`, vendor the two PNGs into the repo, and point
+     `EGM96_5_MIN`/`EGM96_15_MIN` at them via `[env]` in `.cargo/config.toml` (verified: builds clean offline).
+   - **Do NOT use the `egm2008` crate**: it embeds only a 3-degree grid — measured **16 m error at Everest**
+     (−44.687 vs −28.74). Unusable for this purpose.
+   - Heavier alternatives if ever needed: Rust Geodesy (`geodesy` crate, PROJ-like pipelines) or `proj` bindings
+     (proper vertical datum grids incl. EGM2008, but a C dependency, incompatible with wasm).
+   - **AGL** should be answered by the renderer itself (terrain-height query at the agent's footprint — the
+     thesis's "random-access terrain data" requirement exists for exactly this), not by a geodesy library.
 3. Whatever the choice, fix the streamed-DEM datum handling (orthometric → ellipsoidal at ingest) at the same time,
-   since it is the same geoid model doing the work.
+   since it is the same geoid model doing the work. The geoid is smooth at tile scale: evaluating undulation at
+   tile corners and bilinearly interpolating is sufficient and effectively free.
 
 ---
 
